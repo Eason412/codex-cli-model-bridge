@@ -20,6 +20,8 @@
 - **ChatGPT plugins/account features disappear**: the root credential was switched to API-key auth. Restore the ChatGPT `auth.json` before continuing; never use `forced_login_method = "api"` as a probe against the shared Codex home.
 - **WebSocket retries on a third-party model**: set the managed catalog entry's `prefer_websockets` to `false` and resync. HTTP Responses is the compatibility baseline.
 - **Subagent fails with HTTP 422 and `ModelInput`**: Codex Multi-Agent v2 sent a private `agent_message` item that the third-party Responses endpoint does not deserialize. Enable CLIProxyAPI's official `codex.optimize-multi-agent-v2` compatibility transform and verify with `probe-multi-agent`. Keep the 8318 transparent proxy limited to header rewriting.
+- **Child starts but does not receive its task, uses another model, or inherits unexpected context**: inspect the plugin conversion, active V1/V2 schema, role overrides, and child records using [spawn-compatibility.md](spawn-compatibility.md). Protocol-marker success still requires an authorized native spawn check for the affected scenario.
+- **Multiple CPA installations or local compatibility patches**: identify the listener's actual executable and service manager before any restart or upgrade. `configure-multi-agent` does not restart services; preserve required patches and avoid starting a second listener.
 - **Profile list stale**: start a new profile-backed CLI task after the catalog is valid. Do not edit SQLite or app resources.
 - **Fast rejected**: remove `service_tier = "fast"` or use the default tier. Do not rename the model to imply Fast.
 

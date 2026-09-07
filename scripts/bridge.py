@@ -29,6 +29,7 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -790,21 +791,6 @@ def start_launch_agent(path: Path) -> str | None:
     return None if proc.returncode == 0 else "launchctl failed to start the transparent proxy"
 
 
-def restart_cliproxyapi(brew: Path) -> str | None:
-    try:
-        proc = subprocess.run(
-            [str(brew), "services", "restart", "cliproxyapi"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"CLIProxyAPI restart failed: {type(exc).__name__}"
-    return None if proc.returncode == 0 else "CLIProxyAPI restart failed"
-
-
 def wait_for_models(base_url: str, attempts: int = 30) -> bool:
     request = urllib.request.Request(f"{base_url.rstrip('/')}/models", headers={"Authorization": "Bearer probe"})
     for _ in range(attempts):
@@ -820,7 +806,6 @@ def wait_for_models(base_url: str, attempts: int = 30) -> bool:
 
 def cmd_configure_multi_agent(args: argparse.Namespace) -> None:
     proxy_config = Path(args.proxy_config).expanduser()
-    brew = Path(args.brew).expanduser()
     if not is_loopback(args.transparent_url):
         emit({"status": "blocked", "error": "transparent URL must be loopback-only"}, 2)
     try:
@@ -840,6 +825,8 @@ def cmd_configure_multi_agent(args: argparse.Namespace) -> None:
         )
     updated = replace_yaml_section_bool(current, "codex", "optimize-multi-agent-v2", True)
     changed = updated != current
+    if args.apply and changed and not args.expected_sha256:
+        emit({"status": "blocked", "error": "preview first and supply --expected-sha256 before applying changes"}, 2)
     result = {
         "status": "planned" if not args.apply else "unchanged",
         "finding_id": "models.codex_multi_agent_v2_compat_disabled",
@@ -849,6 +836,7 @@ def cmd_configure_multi_agent(args: argparse.Namespace) -> None:
         "multi_agent_v2_compat": True,
         "backup": None,
         "restarted": False,
+        "runtime_verified": False,
         "secrets_redacted": True,
     }
     if not args.apply:
@@ -860,26 +848,11 @@ def cmd_configure_multi_agent(args: argparse.Namespace) -> None:
     verified = proxy_config.read_text(encoding="utf-8")
     if yaml_section_bool(verified, "codex", "optimize-multi-agent-v2") is not True:
         emit({"status": "blocked", "error": "post-write multi-agent compatibility verification failed"}, 2)
-    if not args.skip_restart:
-        restart_error = None
-        if changed:
-            if platform.system() == "Darwin" and brew.exists():
-                restart_error = restart_cliproxyapi(brew)
-                result["restarted"] = restart_error is None
-            else:
-                result["restarted"] = False
-                result["restart_hint"] = "restart the local CLIProxyAPI process, then rerun audit"
-        if restart_error:
-            emit({"status": "blocked", "error": restart_error}, 2)
-        if not wait_for_models(args.transparent_url):
-            emit(
-                {
-                    "status": "blocked",
-                    "error": "CLIProxyAPI did not become healthy",
-                    "restart_hint": result.get("restart_hint"),
-                },
-                2,
-            )
+    # Homebrew 存在不代表它管理当前监听进程。只写配置，不猜测或切换服务所有者。
+    result["restart_hint"] = (
+        "Identify the active listener executable and its service manager; preserve local patches. "
+        "After approval reload/restart that same service if needed, then run protocol and native spawn checks."
+    )
     emit(result)
 
 
@@ -891,6 +864,8 @@ def cmd_probe_multi_agent(args: argparse.Namespace) -> None:
         emit({"status": "blocked", "error": "--models is required"}, 2)
     results: dict[str, dict] = {}
     for model in models:
+        # 随机标记只放进 agent_message 的任务正文，防止固定回复或空任务被误判为成功。
+        expected = "CODEX_MULTI_AGENT_OK_" + uuid.uuid4().hex
         payload = {
             "model": model,
             "input": [
@@ -901,7 +876,7 @@ def cmd_probe_multi_agent(args: argparse.Namespace) -> None:
                     "recipient": "/root/compat_probe",
                     "content": [
                         {"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\n"},
-                        {"type": "encrypted_content", "encrypted_content": "Reply exactly: CODEX_MULTI_AGENT_OK"},
+                        {"type": "encrypted_content", "encrypted_content": f"Reply exactly: {expected}"},
                     ],
                     "internal_chat_message_metadata_passthrough": {
                         "turn_id": "00000000-0000-4000-8000-000000000002"
@@ -921,8 +896,20 @@ def cmd_probe_multi_agent(args: argparse.Namespace) -> None:
         )
         try:
             with urllib.request.urlopen(request, timeout=args.timeout) as response:
-                response.read()
-            results[model] = {"ok": response.status == 200, "status": response.status, "error": None}
+                body = json.load(response)
+            # 只接收完成的 Responses assistant 文本；HTTP 200、回显 input 或 reasoning 不算完成任务。
+            output = body.get("output", []) if isinstance(body, dict) else []
+            texts = []
+            if isinstance(output, list):
+                for item in output:
+                    if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "assistant":
+                        continue
+                    content = item.get("content", [])
+                    if isinstance(content, list):
+                        texts.extend(part["text"] for part in content if isinstance(part, dict) and part.get("type") == "output_text" and isinstance(part.get("text"), str))
+            ok = (response.status == 200 and isinstance(body, dict) and body.get("status") == "completed"
+                  and not body.get("error") and "".join(texts).strip() == expected)
+            results[model] = {"ok": ok, "status": response.status, "error": None if ok else "response did not complete the agent task with the expected marker"}
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             results[model] = {
@@ -930,10 +917,11 @@ def cmd_probe_multi_agent(args: argparse.Namespace) -> None:
                 "status": exc.code,
                 "error": "unsupported Codex agent_message input" if "ModelInput" in body else "upstream rejected the probe",
             }
-        except (OSError, TimeoutError) as exc:
+        except (OSError, TimeoutError, ValueError) as exc:
             results[model] = {"ok": False, "status": None, "error": type(exc).__name__}
     passed = all(item["ok"] for item in results.values())
-    emit({"status": "passed" if passed else "failed", "results": results, "secrets_redacted": True}, 0 if passed else 2)
+    emit({"status": "passed" if passed else "failed", "probe_scope": "synthetic_agent_message_delivery",
+          "native_spawn_tested": False, "results": results, "secrets_redacted": True}, 0 if passed else 2)
 
 
 def cmd_configure_desktop(args: argparse.Namespace) -> None:
@@ -1704,9 +1692,9 @@ def parser() -> argparse.ArgumentParser:
     multi_agent = sub.add_parser("configure-multi-agent")
     multi_agent.add_argument("--proxy-config", default=str(DEFAULT_PROXY_CONFIG))
     multi_agent.add_argument("--transparent-url", default=DEFAULT_TRANSPARENT_PROXY_URL)
-    multi_agent.add_argument("--brew", default=str(DEFAULT_BREW))
+    multi_agent.add_argument("--brew", default=str(DEFAULT_BREW), help="Legacy option; no service is restarted")
     multi_agent.add_argument("--expected-sha256")
-    multi_agent.add_argument("--skip-restart", action="store_true", help="Tests only; never use for live repair")
+    multi_agent.add_argument("--skip-restart", action="store_true", help="Legacy no-op; this command never restarts services")
     multi_agent.add_argument("--apply", action="store_true")
     multi_agent.set_defaults(func=cmd_configure_multi_agent)
 

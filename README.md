@@ -1,10 +1,10 @@
 # Codex CLI Model Bridge
 
-将 CLIProxyAPI（CPA）中已配置的 Coding Plan／订阅账号模型接入 Codex 的 Skill，提供 Provider 检查、模型目录同步、本地透明代理和调用验证工具。
+面向 CLIProxyAPI（CPA）的 Codex 模型接入与配置维护 Skill，支持 Coding Plan／订阅模型接入、Provider 检查、模型目录同步、本地透明代理和调用验证。
 
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
-Skill 负责搭建与维护；运行时由代理和 CPA 转发请求：
+Skill 负责配置维护，透明代理和 CPA 负责运行时请求转发。默认请求链路：
 
 ```text
 Codex → 本地透明代理 → CLIProxyAPI → Coding Plan／订阅模型服务
@@ -13,11 +13,11 @@ Codex → 本地透明代理 → CLIProxyAPI → Coding Plan／订阅模型服�
 
 上图端口为脚本默认值。模型目录负责选择器中的名称和参数，CPA 根据请求中的模型 ID 连接上游。
 
-## 模型支持
+## 模型发现与目录同步
 
-仓库内置以下模型清单；同系列新增型号可以按 [模型清单说明](references/model-manifests.md) 扩展。
+通过 CPA 的 `/v1/models` 接口核对可用模型，结合适配清单补充上下文窗口、输入模态和推理档位，生成 Codex 模型目录。内置适配清单如下；新增型号的清单格式见 [模型清单说明](references/model-manifests.md)。
 
-| 系列 | 内置模型 ID |
+| 模型系列 | 内置适配清单 |
 | --- | --- |
 | Kimi | `kimi-k3` |
 | Gemini | `gemini-3.7-flash`、`gemini-3.8-flash` |
@@ -42,7 +42,9 @@ Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划�
 - **独立配置**：生成 CLIProxyAPI 专用配置与凭据读取助手，保留原有 Codex 配置。
 - **桌面桥接**：配置本地认证头转发代理，保留原有 OpenAI Provider 身份和登录。
 - **模型目录管理**：按模型清单同步目录，维护受管条目与显示策略。
-- **调用验证**：通过 Codex 检查文本响应、Shell 工具事件及多工具调用顺序。
+- **调用验证**：文本响应、Shell 工具事件与多工具调用顺序检查。
+- **子代理兼容检查**：V2 任务正文传递探测，以及原生 spawn、上下文继承和模型身份的专项验收说明。
+- **配置变更保护**：预览摘要校验、配置备份与服务重启分离，保留现有进程管理方式。
 
 ## 环境准备
 
@@ -50,7 +52,9 @@ Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划�
 
 Python 主脚本使用标准库；仓库不包含 CPA 服务、WorkBuddy 插件或上游账号配置。CPA 的安装与模型接入见 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)。
 
-### 尚未安装 CPA
+### CPA 安装与初始化
+
+以下流程适用于首次安装；已有 CPA 环境保留当前服务管理方式。
 
 1. **安装程序。** macOS 已安装 Homebrew 时，在终端执行：
 
@@ -72,7 +76,7 @@ Python 主脚本使用标准库；仓库不包含 CPA 服务、WorkBuddy 插件�
 
 4. **连接 Codex。** 获取本 Skill 后，从下方的 `audit` 开始，预览配置、同步所需模型并执行探测。CPA 客户端密钥由本机凭据助手读取，账号配置无需复制到本仓库。
 
-## 获取与使用
+## 安装与调用
 
 ```sh
 git clone https://github.com/Eason412/codex-cli-model-bridge.git
@@ -91,7 +95,7 @@ Windows 可将 `python3` 替换为 `py -3`。命令成功后会显示可用子�
 
 将本目录安装到所用 Codex 环境的 Skill 目录后，也可以用 `$codex-cli-model-bridge` 调用。
 
-### 使用与维护同一份源码
+### 单一源码维护
 
 macOS / Linux 可以将 Skill 入口链接到这个 Git 仓库。在仓库根目录执行，目标位置须尚未存在；已有安装先备份到 Skill 扫描目录之外：
 
@@ -116,7 +120,7 @@ Codex 支持符号链接形式的 Skill 目录，见 [官方说明](https://lear
 
 以下命令在本仓库根目录执行。
 
-### 检查当前配置
+### 配置检查
 
 ```sh
 python3 scripts/bridge.py audit
@@ -124,7 +128,7 @@ python3 scripts/bridge.py audit
 
 输出配置、目录和连接检查结果。代理配置未被自动发现时，使用 `--proxy-config` 指定实际路径；完整选项见各子命令的 `--help`。
 
-### 预览独立配置与模型同步
+### 独立配置与目录同步预览
 
 ```sh
 python3 scripts/bridge.py configure
@@ -133,7 +137,7 @@ python3 scripts/bridge.py sync
 
 确认预览结果后，分别添加 `--apply` 应用。`configure` 生成独立配置，`sync` 写入模型目录。具体流程见 [Skill 操作说明](SKILL.md)。
 
-### 预览桌面透明代理配置
+### 桌面透明代理配置预览
 
 ```sh
 python3 scripts/bridge.py configure-desktop
@@ -141,7 +145,7 @@ python3 scripts/bridge.py configure-desktop
 
 该模式会调整 Codex 根配置并启动本地代理。应用时需要预览返回的 `--expected-sha256`，步骤见 [桌面桥接流程](SKILL.md#5-enable-transparent-desktop-coexistence)。
 
-### 验证模型调用
+### 模型调用验证
 
 将 `<model-id>` 替换为 CPA 中已配置的模型 ID：
 
@@ -150,6 +154,18 @@ python3 scripts/bridge.py probe --desktop --models "<model-id>"
 ```
 
 独立配置模式省略 `--desktop`。探测会实际调用模型，消耗对应服务额度；`--shell` 检查真实命令事件，`--tool-sequence` 检查连续工具调用。
+
+### 子代理任务传递验证
+
+以下命令通过透明代理发送合成的 V2 任务，要求完成响应中的随机标记与任务正文一致：
+
+```sh
+python3 scripts/bridge.py probe-multi-agent --models "<model-id>"
+```
+
+输出中的 `probe_scope` 为 `synthetic_agent_message_delivery`，`native_spawn_tested` 为 `false`。原生 spawn、角色覆盖、实际模型身份及 `fork_turns` 继承范围的验证步骤见 [子代理兼容与维护](references/spawn-compatibility.md)。
+
+`configure-multi-agent` 提供兼容开关的配置预览；配置写入需要 `--apply` 与预览返回的 `--expected-sha256`。该命令不执行服务重启；运行程序、服务管理方式及本地补丁的核对要求见上述维护说明。
 
 ## 文件与扩展
 
@@ -162,7 +178,7 @@ python3 scripts/bridge.py probe --desktop --models "<model-id>"
 | [policies/catalog.json](policies/catalog.json) | 原生模型保护和显示策略 |
 | [tests/test_bridge.py](tests/test_bridge.py) | 隔离配置与测试替身回归 |
 
-模型清单描述的是目录元数据，可用性以实际 CPA 路由和调用结果为准。新增条目见 [模型清单说明](references/model-manifests.md)，其他入口见 [Windows 配置](references/windows.md)、[GLM Coding Plan](references/glm-coding-plan.md) 和 [故障排查](references/troubleshooting.md)。
+其他入口：[Windows 配置](references/windows.md) · [GLM Coding Plan](references/glm-coding-plan.md) · [故障排查](references/troubleshooting.md)。
 
 ## 开发检查
 

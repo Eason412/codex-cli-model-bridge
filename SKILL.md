@@ -188,6 +188,8 @@ This passes only when Codex records a successful `pwd` command execution; a mode
 
 ### 7.1 Repair Codex Multi-Agent input for third-party models
 
+For spawn failures, context inheritance, unexpected child models, plugin routes, or CPA upgrades, read [spawn-compatibility.md](references/spawn-compatibility.md). Use the actual runtime tool schema; do not treat model examples in tool descriptions as the complete allowlist.
+
 Codex Multi-Agent v2 uses a private Responses input item named `agent_message`. Native OpenAI/Codex routes accept it, while xAI and other third-party Responses endpoints may reject it with HTTP 422 and `ModelInput`. CLIProxyAPI 7.2.125+ contains the compatibility transform; do not duplicate this protocol rewrite in the transparent header proxy.
 
 Preview and enable it in the canonical CLIProxyAPI config:
@@ -199,7 +201,7 @@ python3 <skill-dir>/scripts/bridge.py configure-multi-agent \
   --apply
 ```
 
-This changes only `codex.optimize-multi-agent-v2` to `true`, creates a `0600` backup, restarts CLIProxyAPI when a macOS Homebrew service exists, and waits for the transparent route to recover. On Windows, tell the user to restart CLIProxyAPI locally if the live `/v1/models` check does not recover. The transform is gated to official Codex user agents. For xAI, it converts `agent_message` into a standard user `message`, normalizes its encrypted content wrapper, and leaves normal OpenAI history/provider identity untouched.
+This changes only `codex.optimize-multi-agent-v2` to `true` and creates a `0600` backup. Changed writes require the approved SHA-256. The command does not restart services or claim runtime verification. Before any reload/restart, identify the actual listener executable and service manager, preserve local patches, and obtain approval. Homebrew being installed does not establish that it owns the running CPA. The transform is gated to official Codex user agents; plugin executors must also invoke it, not just built-in executors.
 
 Verify the exact failing shape, then run the normal Codex probe:
 
@@ -208,7 +210,9 @@ python3 <skill-dir>/scripts/bridge.py probe-multi-agent --models grok-4.6
 python3 <skill-dir>/scripts/bridge.py probe --desktop --tool-sequence --models grok-4.6
 ```
 
-For Grok agentic use, require CLIProxyAPI `7.2.130` or newer plus both probes above. A plain text completion or one successful `pwd` does not qualify the model for multi-tool or Subagent work. Older proxy versions may mishandle Responses tool identity, incremental tool state, or Codex multi-agent namespaces.
+`probe-multi-agent` requires a completed assistant response matching a random marker carried only in the synthetic task body. It tests protocol message delivery, not native spawn; its output explicitly marks `native_spawn_tested=false`. Run an authorized real spawn test for affected model/role/context combinations and verify the child result and recorded model identity before claiming spawn compatibility.
+
+Older Grok routes need the tool fixes introduced by CLIProxyAPI 7.2.130, but a version floor is not proof that a plugin executor preserves V2 tasks. Check the actual target build and regression evidence. A plain text completion, HTTP 200, or one successful `pwd` does not qualify a model for Subagent work.
 
 ### 8. Verify consumption
 
@@ -233,7 +237,7 @@ Report:
 5. Re-run profile catalog sync and the affected Codex-level probes.
 6. Verify normal desktop history remains visible under the default Provider.
 
-For a Subagent failure whose HTTP 422 body mentions `ModelInput`, inspect the failed task for an `agent_message` input item. On CLIProxyAPI 7.2.125+, enable `codex.optimize-multi-agent-v2`, then run `probe-multi-agent`; do not flatten all requests indiscriminately in the transparent header proxy.
+For HTTP 422 / `ModelInput`, or a child that starts but asks for a task, compare ordinary user-message delivery with V2 `agent_message` delivery. Inspect both the compatibility flag and the selected plugin executor's conversion path; follow [spawn-compatibility.md](references/spawn-compatibility.md). Do not add duplicate protocol translation to the transparent header proxy.
 
 Read [troubleshooting.md](references/troubleshooting.md) for failure classification and rollback.
 

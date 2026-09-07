@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import hashlib
 import json
 from pathlib import Path
@@ -47,6 +49,60 @@ def native_template() -> dict:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_multi_agent_probe_requires_delivered_task_result(self) -> None:
+        spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
+        module = __import__("importlib.util").util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for scenario in ["valid", "empty", "wrong", "incomplete", "invalid_json", "input_echo", "error"]:
+            with self.subTest(scenario=scenario):
+                def fake_open(request, timeout):
+                    task = json.loads(request.data)["input"][0]["content"][1]["encrypted_content"]
+                    marker = task.removeprefix("Reply exactly: ")
+                    body = {"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": marker}]}]}
+                    if scenario == "empty": body["output"] = []
+                    if scenario == "wrong": body["output"][0]["content"][0]["text"] = "Please provide a task"
+                    if scenario == "incomplete": body["status"] = "incomplete"
+                    if scenario == "input_echo": body["output"][0]["role"] = "user"
+                    if scenario == "error": body["error"] = {"message": "fixture failure"}
+                    response = io.BytesIO(b"not-json" if scenario == "invalid_json" else json.dumps(body).encode())
+                    response.status = 200
+                    return response
+                output = io.StringIO()
+                args = module.parser().parse_args(["probe-multi-agent", "--models", "fixture-model"])
+                with patch.object(module.urllib.request, "urlopen", side_effect=fake_open), contextlib.redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as caught:
+                        module.cmd_probe_multi_agent(args)
+                self.assertEqual(caught.exception.code, 0 if scenario == "valid" else 2)
+                result = json.loads(output.getvalue())
+                self.assertFalse(result["native_spawn_tested"])
+                self.assertNotIn("Please provide a task", output.getvalue())
+
+    def test_multi_agent_configuration_requires_approval_and_never_restarts(self) -> None:
+        spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
+        module = __import__("importlib.util").util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as raw:
+            config = Path(raw) / "config.yaml"
+            before = "codex:\n  optimize-multi-agent-v2: false\n"
+            config.write_text(before, encoding="utf-8")
+            for approved in [False, True]:
+                command = ["configure-multi-agent", "--proxy-config", str(config), "--apply"]
+                if approved: command += ["--expected-sha256", hashlib.sha256(before.encode()).hexdigest()]
+                args = module.parser().parse_args(command)
+                output = io.StringIO()
+                with patch.object(module.subprocess, "run") as runner, patch.object(module.urllib.request, "urlopen") as http, contextlib.redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as caught:
+                        module.cmd_configure_multi_agent(args)
+                    runner.assert_not_called()
+                    http.assert_not_called()
+                self.assertEqual(caught.exception.code, 0 if approved else 2)
+                if not approved: self.assertEqual(config.read_text(), before)
+                else:
+                    result = json.loads(output.getvalue())
+                    self.assertFalse(result["restarted"])
+                    self.assertFalse(result["runtime_verified"])
+                    self.assertTrue(Path(result["backup"]).exists())
+
     def test_local_catalog_policy_default_and_explicit_override(self) -> None:
         spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
         module = __import__("importlib.util").util.module_from_spec(spec)
