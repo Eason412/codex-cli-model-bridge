@@ -2,9 +2,7 @@
 
 将 CLIProxyAPI（CPA）中已配置的 Coding Plan／订阅账号模型接入 Codex 的 Skill，提供 Provider 检查、模型目录同步、本地透明代理和调用验证工具。
 
-基于 [zjp1997720/zhijian-skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 维护，保留原作者 Zhijian AI 的 MIT 版权声明。本仓库补充模型清单、仓外个人策略、中文使用说明和贡献流程；CPA 桥接能力原本就包含在上游实现中。
-
-上游文档见 [中文说明](https://github.com/zjp1997720/zhijian-skills/blob/main/docs/skills/codex-cli-model-bridge/README.zh-CN.md)。不使用 CPA、但已有 Codex Router 的用户，可查看上游的 [GLM Coding Plan / Router 路径](https://github.com/zjp1997720/zhijian-skills/blob/main/skills/codex-cli-model-bridge/references/glm-coding-plan.md)。
+本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
 Skill 负责搭建与维护；运行时由代理和 CPA 转发请求：
 
