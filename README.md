@@ -2,6 +2,10 @@
 
 将 CLIProxyAPI（CPA）中已配置的 Coding Plan／订阅账号模型接入 Codex 的 Skill，提供 Provider 检查、模型目录同步、本地透明代理和调用验证工具。
 
+基于 [zjp1997720/zhijian-skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 维护，保留原作者 Zhijian AI 的 MIT 版权声明。本仓库补充模型清单、仓外个人策略、中文使用说明和贡献流程；CPA 桥接能力原本就包含在上游实现中。
+
+上游文档见 [中文说明](https://github.com/zjp1997720/zhijian-skills/blob/main/docs/skills/codex-cli-model-bridge/README.zh-CN.md)。不使用 CPA、但已有 Codex Router 的用户，可查看上游的 [GLM Coding Plan / Router 路径](https://github.com/zjp1997720/zhijian-skills/blob/main/skills/codex-cli-model-bridge/references/glm-coding-plan.md)。
+
 Skill 负责搭建与维护；运行时由代理和 CPA 转发请求：
 
 ```text
@@ -47,6 +51,28 @@ Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划�
 需要 Python 3.11+、已安装的 Codex CLI，以及已配置上游认证、可在本机访问的 CLIProxyAPI。透明代理模式另需 Node.js。
 
 Python 主脚本使用标准库；仓库不包含 CPA 服务、WorkBuddy 插件或上游账号配置。CPA 的安装与模型接入见 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)。
+
+### 尚未安装 CPA
+
+1. **安装程序。** macOS 已安装 Homebrew 时，在终端执行：
+
+   ```sh
+   brew install cliproxyapi
+   ```
+
+   Windows 可下载 [官方发行版](https://github.com/router-for-me/CLIProxyAPI/releases)；Linux 安装器、AUR 和其他安装方式见 [CPA 官方快速开始](https://help.router-for.me/cn/introduction/quick-start)。
+
+2. **配置本机访问与上游账号。** 按 [基础配置](https://help.router-for.me/cn/configuration/basic) 设置 `host: "127.0.0.1"`、`port: 8317`，保持远程管理关闭，并在 `api-keys` 中设置自己的客户端访问密钥。Homebrew 服务默认读取 `$(brew --prefix)/etc/cliproxyapi.conf`。再按 CPA 文档中对应提供商的说明完成 Coding Plan／订阅认证；插件路由还需安装相应插件。
+
+3. **启动服务。** macOS 配置完成后执行：
+
+   ```sh
+   brew services start cliproxyapi
+   ```
+
+   Windows / Linux 按所选安装方式启动，并指定实际配置文件。确认服务正常启动，且经过客户端认证的 `/v1/models` 返回目标模型 ID。
+
+4. **连接 Codex。** 获取本 Skill 后，从下方的 `audit` 开始，预览配置、同步所需模型并执行探测。CPA 客户端密钥由本机凭据助手读取，账号配置无需复制到本仓库。
 
 ## 获取与使用
 
