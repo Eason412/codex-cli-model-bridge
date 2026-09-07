@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "bridge.py"
@@ -46,6 +47,22 @@ def native_template() -> dict:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_local_catalog_policy_default_and_explicit_override(self) -> None:
+        spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
+        module = __import__("importlib.util").util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = root / "catalog-policy.json"
+            with patch.object(module, "DEFAULT_STATE_DIR", root):
+                self.assertEqual(module.default_catalog_policy(), module.DEFAULT_CATALOG_POLICY)
+                local.write_text(json.dumps({"schema_version": 1, "hidden_native_model_ids": ["gpt-5.4"]}), encoding="utf-8")
+                self.assertEqual(module.parser().parse_args(["sync"]).catalog_policy, str(local))
+                explicit = root / "alternate.json"
+                parsed = module.parser().parse_args(["sync", "--catalog-policy", str(explicit)])
+                self.assertEqual(parsed.catalog_policy, str(explicit))
+                self.assertEqual(module.catalog_policy(local)["hidden_native_model_ids"], ["gpt-5.4"])
+
     def test_bundled_manifests_validate(self) -> None:
         for manifest in sorted((SCRIPT.parents[1] / "models").glob("*.json")):
             proc = run_bridge("validate-manifest", str(manifest))

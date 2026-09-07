@@ -331,6 +331,12 @@ def catalog_models(path: Path) -> list[dict]:
     return models
 
 
+def default_catalog_policy(state_dir: Path | None = None) -> Path:
+    """个人显示策略留在仓外；未配置时使用仓库的通用默认值。"""
+    local = (state_dir if state_dir is not None else DEFAULT_STATE_DIR) / "catalog-policy.json"
+    return local if local.exists() else DEFAULT_CATALOG_POLICY
+
+
 def catalog_policy(path: Path) -> dict:
     payload = read_json(path)
     if not isinstance(payload, dict):
@@ -1719,7 +1725,7 @@ def parser() -> argparse.ArgumentParser:
     sync.add_argument("--config", default=str(DEFAULT_CODEX_HOME / "config.toml"))
     sync.add_argument("--catalog", default=str(DEFAULT_CODEX_HOME / "model-catalog-cli-proxy.json"))
     sync.add_argument("--native-catalog", default=str(DEFAULT_CODEX_HOME / "models_cache.json"))
-    sync.add_argument("--catalog-policy", default=str(DEFAULT_CATALOG_POLICY))
+    sync.add_argument("--catalog-policy", default=str(default_catalog_policy()))
     sync.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
     sync.add_argument("--models")
     sync.add_argument("--models-file")

@@ -1,15 +1,38 @@
 # Codex CLI Model Bridge
 
-用于配置和维护 Codex 与 CLIProxyAPI（CPA）连接的 Skill，提供 Provider 检查、模型目录同步、本地透明代理和调用验证工具。
+将 CLIProxyAPI（CPA）中已配置的 Coding Plan／订阅账号模型接入 Codex 的 Skill，提供 Provider 检查、模型目录同步、本地透明代理和调用验证工具。
 
 Skill 负责搭建与维护；运行时由代理和 CPA 转发请求：
 
 ```text
-Codex → 本地透明代理 → CLIProxyAPI → 模型服务
+Codex → 本地透明代理 → CLIProxyAPI → Coding Plan／订阅模型服务
            8318            8317
 ```
 
 上图端口为脚本默认值。模型目录负责选择器中的名称和参数，CPA 根据请求中的模型 ID 连接上游。
+
+## 模型支持
+
+仓库内置以下模型清单；同系列新增型号可以按 [模型清单说明](references/model-manifests.md) 扩展。
+
+| 系列 | 内置模型 ID |
+| --- | --- |
+| Kimi | `kimi-k3` |
+| Gemini | `gemini-3.7-flash`、`gemini-3.8-flash` |
+| DeepSeek | `deepseek-v4-pro`、`deepseek-v4-flash` |
+| Grok | `grok-4.6` |
+| GPT | `gpt-6-astra`；其他原生条目从 Codex 模型缓存继承 |
+
+通过仓外 `models.d/` 扩展清单，还可配置以下 CPA 插件路由：
+
+| 系列 | 模型 ID | 接入方式 |
+| --- | --- | --- |
+| GLM | `glm-5.3-flash` | WorkBuddy 账号 → CPA 插件 |
+| 混元 | `hy4-preview` | WorkBuddy 账号 → CPA 插件 |
+
+Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划与授权方式取决于配置的上游：例如 DeepSeek 清单使用 OpenCode Go 路由描述，GLM Coding Plan 的配置见 [接入参考](references/glm-coding-plan.md)。Skill 使用 CPA 暴露的模型 ID，不保存上游账号凭据。
+
+模型可用性以 CPA 的 `/v1/models` 和实际 Codex 探测结果为准；表中列出的是已提供清单或扩展配置的型号。
 
 ## 主要功能
 
@@ -43,6 +66,27 @@ Windows 可将 `python3` 替换为 `py -3`。命令成功后会显示可用子�
 ```
 
 将本目录安装到所用 Codex 环境的 Skill 目录后，也可以用 `$codex-cli-model-bridge` 调用。
+
+### 使用与维护同一份源码
+
+macOS / Linux 可以将 Skill 入口链接到这个 Git 仓库。在仓库根目录执行，目标位置须尚未存在；已有安装先备份到 Skill 扫描目录之外：
+
+```sh
+mkdir -p "$HOME/.agents/skills"
+ln -s "$PWD" "$HOME/.agents/skills/codex-cli-model-bridge"
+```
+
+Codex 支持符号链接形式的 Skill 目录，见 [官方说明](https://learn.chatgpt.com/docs/build-skills)。之后直接在仓库中维护源码，提交、推送即可同步到 GitHub。
+
+个人文件保持在仓库之外：
+
+| 位置 | 内容 |
+| --- | --- |
+| `~/.config/codex-cli-model-bridge/catalog-policy.json` | 个人模型显示策略，存在时优先于仓库默认策略 |
+| `~/.config/codex-cli-model-bridge/models.d/` | 本机扩展模型清单 |
+| Codex / CPA 各自的配置与认证目录 | 登录、密钥及运行配置 |
+
+个人策略使用完整 JSON，包含 `protected_native_model_ids` 和 `hidden_native_model_ids`。临时指定另一份策略可用 `sync --catalog-policy <path>`，该参数优先级最高。
 
 ## 常用命令
 
@@ -78,7 +122,7 @@ python3 scripts/bridge.py configure-desktop
 将 `<model-id>` 替换为 CPA 中已配置的模型 ID：
 
 ```sh
-python3 scripts/bridge.py probe --desktop --models <model-id>
+python3 scripts/bridge.py probe --desktop --models "<model-id>"
 ```
 
 独立配置模式省略 `--desktop`。探测会实际调用模型，消耗对应服务额度；`--shell` 检查真实命令事件，`--tool-sequence` 检查连续工具调用。
@@ -106,3 +150,7 @@ node --check scripts/transparent_proxy.mjs
 ## 许可证
 
 [MIT](LICENSE)。保留原有版权声明。
+
+## 贡献与 PR
+
+提交 PR 时说明问题、最小复现步骤、原因分析、解决思路和验证结果；模型接入类变更附 CPA 路由类型与脱敏探测结果。具体要求见 [贡献指南](CONTRIBUTING.md)，创建 PR 时会自动显示填写模板。
