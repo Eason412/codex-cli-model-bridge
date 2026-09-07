@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex CLI Model Bridge"
+  short_description: "Add verified loopback models to Codex without hiding ChatGPT history"
+  default_prompt: "Use $codex-cli-model-bridge to audit Codex Providers and history, keep the OpenAI default when it owns most tasks, configure the isolated CLIProxyAPI profile, sync verified models, and probe them with codex exec."
