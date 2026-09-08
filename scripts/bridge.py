@@ -439,6 +439,9 @@ def build_entry(manifest: dict, templates: dict[str, dict]) -> dict:
     if template_slug not in templates:
         raise ValueError(f"template model is missing: {template_slug}")
     entry = copy.deepcopy(templates[template_slug])
+    # 速度档位属于具体模型，不能从通用模板借用，也不能在覆盖原生模型时清空。
+    # 同名原生条目提供默认值；清单中的显式覆盖（包括空数组）优先。
+    native_model = templates.get(manifest["slug"], {})
     entry.update(
         {
             "slug": manifest["slug"],
@@ -449,8 +452,12 @@ def build_entry(manifest: dict, templates: dict[str, dict]) -> dict:
             "visibility": "list",
             "supported_in_api": True,
             "priority": manifest["priority"],
-            "additional_speed_tiers": manifest.get("additional_speed_tiers", []),
-            "service_tiers": manifest.get("service_tiers", []),
+            "additional_speed_tiers": copy.deepcopy(
+                manifest.get("additional_speed_tiers", native_model.get("additional_speed_tiers", []))
+            ),
+            "service_tiers": copy.deepcopy(
+                manifest.get("service_tiers", native_model.get("service_tiers", []))
+            ),
             "context_window": manifest["context_window"],
             "max_context_window": manifest["context_window"],
             "effective_context_window_percent": manifest["effective_context_window_percent"],
@@ -1536,7 +1543,7 @@ def cmd_probe(args: argparse.Namespace) -> None:
             if not args.desktop:
                 command.extend(["--profile", args.profile])
             if args.fast:
-                command.extend(["--config", 'service_tier="fast"'])
+                command.extend(["--config", 'service_tier="fast"', "--config", "features.fast_mode=true"])
             if args.shell or args.tool_sequence:
                 command.append("--json")
             prompt = probe_prompt(args.shell, args.tool_sequence)
@@ -1601,6 +1608,9 @@ def cmd_probe(args: argparse.Namespace) -> None:
                 results[model] = {
                     "ok": ok,
                     "fast": bool(args.fast),
+                    # CLI 完成只证明请求执行；未提供上游 tier 证据时不推断实际计费档位。
+                    "requested_service_tier": "fast" if args.fast else None,
+                    "served_service_tier": None,
                     "shell": bool(args.shell),
                     "shell_executed": shell_executed if args.shell else None,
                     "tool_sequence": bool(args.tool_sequence),

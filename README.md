@@ -43,6 +43,7 @@ Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划�
 - **桌面桥接**：配置本地认证头转发代理，保留原有 OpenAI Provider 身份和登录。
 - **模型目录管理**：按模型清单同步目录，维护受管条目与显示策略。
 - **调用验证**：文本响应、Shell 工具事件与多工具调用顺序检查。
+- **GPT Fast 支持**：同名原生模型的速度档位继承、Fast 单次探测与服务档位转发检查。
 - **子代理兼容检查**：V2 任务正文传递探测，以及原生 spawn、上下文继承和模型身份的专项验收说明。
 - **配置变更保护**：预览摘要校验、配置备份与服务重启分离，保留现有进程管理方式。
 
@@ -119,6 +120,30 @@ Codex 支持符号链接形式的 Skill 目录，见 [官方说明](https://lear
 ## 常用命令
 
 以下命令在本仓库根目录执行。
+
+### GPT Fast 模式
+
+Fast 默认关闭，按需显式启用。安装与模型目录同步只提供 Fast 能力声明，不自动开启加速，也不覆盖已有的 Codex 速度设置。
+
+Fast 沿用原模型 ID，通过服务档位启用。目录同步保留 GPT-6 Astra、GPT-5.6 Sol、Terra、Luna 等同名原生模型的 Fast 元数据，不按 GPT 前缀批量赋予能力，也不生成重复的 `*-fast` 模型。
+
+Codex CLI 中的模式切换与状态检查：
+
+```text
+/fast on
+/fast off
+/fast status
+```
+
+单次 Fast 调用验证：
+
+```sh
+python3 scripts/bridge.py probe --desktop --models gpt-6-astra --fast
+```
+
+探测仅对当前子进程启用 Fast，不修改全局配置。Fast 会增加对应上游的额度消耗或费用；模型、账号与区域支持以实际服务为准。目录同步、持久配置及实际响应档位的区别见 [Fast 配置与验证](references/fast-mode.md)；功能说明见 [OpenAI 官方文档](https://learn.chatgpt.com/zh-Hans/docs/agent-configuration/speed)。
+
+Sol、Terra、Luna 分别使用 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`；`--models` 支持逗号分隔的多个 ID。ChatGPT 订阅桥接中的响应档位回显不等同于公开 API 的计费档位判断，不以 `default` 回显单独判定 Fast 失效。
 
 ### 配置检查
 

@@ -138,19 +138,26 @@ It then keeps `model_provider = "openai"`, sets `openai_base_url = "http://127.0
 
 ### 6. Handle Fast mode correctly
 
-Codex Fast mode is a service tier on a model, not normally a second model entry. For a model whose catalog advertises the Fast tier, use:
+Codex Fast mode is a service tier on the same model, not a second model entry. For Fast work, read [fast-mode.md](references/fast-mode.md) and verify the exact model's native metadata. Sync preserves `additional_speed_tiers` and `service_tiers` from the matching native model unless the manifest explicitly overrides them; it never borrows another model's Fast support from `template_slug`.
+
+Use `/fast on`, `/fast off`, or `/fast status` in Codex CLI. For an explicitly requested persistent default, merge these values into the existing TOML without duplicating tables:
 
 ```toml
 service_tier = "fast"
+
+[features]
+fast_mode = true
 ```
 
 or launch a one-off run with:
 
 ```bash
-codex -c 'service_tier="fast"'
+codex -c 'features.fast_mode=true' -c 'service_tier="fast"'
 ```
 
-Codex maps `fast` to the priority request value. Do not create `*-fast` as a cosmetic catalog alias. A separate route is acceptable only when the upstream truly requires it and a live Responses probe verifies the distinct routing semantics.
+Codex maps `fast` to the priority request value. Preserve that field through the proxy; do not hardcode Fast for every request or create `*-fast` catalog aliases. Fast increases upstream usage/cost and remains subject to model/account/region availability. Do not change the global default merely to expose Fast support.
+
+`probe --fast` sets both flags only for its child process and refuses models without advertised Fast support. Cover requested native GPT models such as Astra, Sol, Terra and Luna using their exact IDs. A successful CLI probe establishes request completion; `served_service_tier` stays null without raw response evidence. For ChatGPT-authenticated Codex, a response tier of `default` does not establish that Fast was ignored (see the OpenAI clarification in the Fast reference). Verify the outgoing priority request and proxy preservation; treat response-tier interpretation and speed measurement separately from API-key-mode semantics.
 
 ### 7. Probe through Codex itself
 
