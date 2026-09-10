@@ -25,6 +25,7 @@ class SyncScopeTests(unittest.TestCase):
         self.config = self.root / "config.toml"
         self.policy = self.root / "policy.json"
         self.state = self.root / "state.json"
+        self.enabled = None
         self.config.write_text('model_provider = "openai"\n')
         self.policy.write_text(json.dumps({"schema_version": 1, "hidden_native_model_ids": ["gpt-5.4"]}))
         self.astra = {**native_template(), "slug": "gpt-6-astra", "context_window": 1000000,
@@ -50,15 +51,25 @@ class SyncScopeTests(unittest.TestCase):
         return {m["slug"]: m for m in json.loads(self.target.read_text())["models"]}
 
     def sync(self, *extra, expected=0):
+        enabled_path = self.root / "enabled-manifests.json"
+        if self.enabled is None:
+            if enabled_path.exists():
+                enabled_path.unlink()
+        else:
+            enabled_path.write_text(self.enabled, encoding="utf-8")
         args = bridge.parser().parse_args([
             "sync", "--config", str(self.config), "--native-catalog", str(self.native),
             "--catalog", str(self.target), "--catalog-policy", str(self.policy),
-            "--state-dir", str(self.root),
+            "--state-dir", str(self.root), "--enabled-manifests", str(enabled_path),
             "--skip-live-check", "--apply", *extra])
         output = io.StringIO()
-        with patch.object(bridge, "manifest_paths", side_effect=lambda selected: [
-            path for slug, path in self.manifests.items() if selected is None or slug in selected
-        ]), contextlib.redirect_stdout(output):
+        self.path_calls = []
+        with patch.object(bridge, "manifest_index", side_effect=lambda: {
+            slug: path for slug, path in self.manifests.items()
+        }), patch.object(bridge, "manifest_paths", side_effect=lambda selected, enabled_ids=None: (
+            self.path_calls.append({"selected": selected, "enabled_ids": enabled_ids}),
+            [path for slug, path in self.manifests.items() if selected is None or slug in selected],
+        )[1]), contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as caught:
                 bridge.cmd_sync(args)
         self.assertEqual(caught.exception.code, expected, output.getvalue())
@@ -126,6 +137,74 @@ class SyncScopeTests(unittest.TestCase):
         self.assertEqual(result["changes"]["removed"], ["manual"])
         self.assertNotIn("manual", self.entries())
         self.assertEqual(self.entries()["gpt-6-astra"], self.astra)
+
+    def test_enabled_manifests_limit_bundled_scope(self):
+        """启用清单解析后交给清单解析；解析函数自身的作用域另行单独验证。"""
+        self.enabled = json.dumps({"schema_version": 1, "enabled": ["gpt-6-astra"]})
+        result = self.sync()
+        self.assertEqual(result["enabled_manifests"], ["gpt-6-astra"])
+        self.assertEqual(result["sync_scope"], "full")
+        self.assertEqual(self.path_calls[-1]["enabled_ids"], ["gpt-6-astra"])
+        self.assertIsNone(self.path_calls[-1]["selected"])
+        # 该条目由清单重建：必须保留受管覆盖值，而不是退回原生缓存窗口
+        self.assertEqual(self.entries()["gpt-6-astra"]["context_window"], 1000000)
+        self.assertEqual(self.entries()["gpt-6-astra"]["priority"], 0)
+
+    def test_enabled_manifests_absent_keeps_previous_behavior(self):
+        """文件不存在时仍同步全部内置清单，不影响未使用该功能的机器。"""
+        self.enabled = None
+        result = self.sync()
+        self.assertIsNone(result["enabled_manifests"])
+
+    def test_enabled_manifests_rejects_unknown_without_writing(self):
+        before = {p: p.read_bytes() for p in [self.target, self.state]}
+        self.enabled = json.dumps({"schema_version": 1, "enabled": ["gpt-6-astra", "no-such-model"]})
+        result = self.sync(expected=2)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("no-such-model", result["error"])
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+
+    def test_enabled_manifests_rejects_duplicates_and_malformed(self):
+        for payload, marker in [
+            (json.dumps({"schema_version": 1, "enabled": ["gpt-6-astra", "gpt-6-astra"]}), "duplicates"),
+            ('{"schema_version": 1, "enabled": "gpt-6-astra"}', "array"),
+            ('{"schema_version": 2, "enabled": []}', "schema_version"),
+            ("not json at all", "invalid"),
+        ]:
+            with self.subTest(marker=marker):
+                self.enabled = payload
+                result = self.sync(expected=2)
+                self.assertEqual(result["status"], "blocked")
+
+    def test_models_flag_overrides_enabled_manifests(self):
+        """临时接入必须能用 --models 越过启用清单，无需先改文件。"""
+        self.enabled = json.dumps({"schema_version": 1, "enabled": ["gpt-6-astra"]})
+        before = self.entries()
+        result = self.sync("--models", "deepseek-v4.1-flash")
+        self.assertEqual(result["changes"]["added"], ["deepseek-v4.1-flash"])
+        self.assertEqual({k: self.entries()[k] for k in before}, before)
+
+    def test_manifest_paths_scope_is_limited_by_enabled_ids(self):
+        """纯函数级验证：启用清单只裁剪内置清单，个人清单始终参与。"""
+        skill = self.root / "skill"
+        (skill / "models").mkdir(parents=True)
+        state = self.root / "state-dir"
+        (state / "models.d").mkdir(parents=True)
+        for name in ["gpt-6-astra", "gpt-5.6-sol"]:
+            (skill / "models" / f"{name}.json").write_text("{}", encoding="utf-8")
+        (state / "models.d" / "glm-5.3-flash.json").write_text("{}", encoding="utf-8")
+        with patch.object(bridge, "SKILL_DIR", skill), patch.object(bridge, "DEFAULT_STATE_DIR", state):
+            bundled_only = {p.stem for p in bridge.manifest_paths()}
+            self.assertEqual(bundled_only, {"gpt-6-astra", "gpt-5.6-sol", "glm-5.3-flash"})
+            scoped = {p.stem for p in bridge.manifest_paths(None, ["gpt-6-astra"])}
+            self.assertEqual(scoped, {"gpt-6-astra", "glm-5.3-flash"})
+            selected = {p.stem for p in bridge.manifest_paths({"glm-5.3-flash"}, ["gpt-6-astra"])}
+            self.assertEqual(selected, {"glm-5.3-flash"})
+            with self.assertRaises(OSError) as caught:
+                bridge.enabled_manifest_ids(
+                    self.root / "enabled-manifests.json", {"gpt-6-astra"}
+                )
+            self.assertIn("No such file", str(caught.exception))
 
 
 if __name__ == "__main__":

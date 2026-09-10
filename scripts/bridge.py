@@ -374,11 +374,46 @@ def protected_supersede_conflicts(manifests: list[dict], policy: dict) -> list[s
     return sorted(protected & superseded)
 
 
-def manifest_paths(selected: set[str] | None = None) -> list[Path]:
-    paths = sorted((SKILL_DIR / "models").glob("*.json"))
+def manifest_index() -> dict[str, Path]:
+    """本机可用的清单：仓库内置清单 + 个人扩展清单，后者同名时优先。"""
+    index: dict[str, Path] = {}
+    for path in sorted((SKILL_DIR / "models").glob("*.json")):
+        index[path.stem] = path
     local = DEFAULT_STATE_DIR / "models.d"
     if local.exists():
-        paths.extend(sorted(local.glob("*.json")))
+        for path in sorted(local.glob("*.json")):
+            index[path.stem] = path
+    return index
+
+
+def enabled_manifest_ids(path: Path, available: set[str]) -> list[str]:
+    """读取个人启用清单。未知名称、重复或结构非法时明确报错，不做静默跳过。"""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("enabled manifests root must be an object")
+    if payload.get("schema_version") != 1:
+        raise ValueError("enabled manifests schema_version must be 1")
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, list) or not all(
+        isinstance(item, str) and item.strip() for item in enabled
+    ):
+        raise ValueError("enabled must be an array of non-empty strings")
+    duplicates = sorted({item for item in enabled if enabled.count(item) > 1})
+    if duplicates:
+        raise ValueError(f"enabled contains duplicates: {', '.join(duplicates)}")
+    unknown = sorted(set(enabled) - available)
+    if unknown:
+        raise ValueError(f"enabled contains unknown models: {', '.join(unknown)}")
+    return enabled
+
+
+def manifest_paths(selected: set[str] | None = None, enabled_ids: list[str] | None = None) -> list[Path]:
+    """内置清单受启用清单约束；个人扩展清单始终参与；--models 只做最终筛选。"""
+    bundled = sorted((SKILL_DIR / "models").glob("*.json"))
+    if enabled_ids is not None:
+        bundled = [path for path in bundled if path.stem in enabled_ids]
+    local = DEFAULT_STATE_DIR / "models.d"
+    paths = bundled + (sorted(local.glob("*.json")) if local.exists() else [])
     if selected is None:
         return paths
     return [path for path in paths if path.stem in selected]
@@ -1337,7 +1372,25 @@ def cmd_sync(args: argparse.Namespace) -> None:
     selected = {item.strip() for item in args.models.split(",") if item.strip()} if args.models else None
     if selected is not None and args.prune_managed:
         emit({"status": "blocked", "error": "--models cannot be combined with --prune-managed; pruning requires a full sync"}, 2)
-    paths = manifest_paths(selected)
+    enabled_path = (
+        Path(args.enabled_manifests).expanduser()
+        if args.enabled_manifests
+        else Path(args.state_dir).expanduser() / "enabled-manifests.json"
+    )
+    enabled_ids: list[str] | None = None
+    if enabled_path.exists():
+        try:
+            enabled_ids = enabled_manifest_ids(enabled_path, set(manifest_index()))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            emit(
+                {
+                    "status": "blocked",
+                    "error": f"enabled manifests is invalid: {exc}",
+                    "enabled_manifests": str(enabled_path),
+                },
+                2,
+            )
+    paths = manifest_paths(selected, enabled_ids)
     manifests: list[dict] = []
     manifest_errors: dict[str, list[str]] = {}
     for path in paths:
@@ -1459,6 +1512,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
         "field_changes": field_changes,
         "order_changed": [entry["slug"] for entry in current] != [entry["slug"] for entry in final_models],
         "sync_scope": "subset" if selected is not None else "full",
+        "enabled_manifests": sorted(enabled_ids) if enabled_ids is not None else None,
         "superseded_routes": sorted(superseded),
         "catalog_policy": str(policy_path),
         "protected_native_models": sorted(protected_native_ids & set(native_map)),
@@ -1752,6 +1806,7 @@ def parser() -> argparse.ArgumentParser:
     sync.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
     sync.add_argument("--models")
     sync.add_argument("--models-file")
+    sync.add_argument("--enabled-manifests")
     sync.add_argument("--adopt", action="store_true")
     sync.add_argument("--prune-managed", action="store_true")
     sync.add_argument("--skip-live-check", action="store_true", help="Tests only; never use for live setup")

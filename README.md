@@ -113,6 +113,7 @@ Codex 支持符号链接形式的 Skill 目录，见 [官方说明](https://lear
 | --- | --- |
 | `~/.config/codex-cli-model-bridge/catalog-policy.json` | 个人模型显示策略，存在时优先于仓库默认策略 |
 | `~/.config/codex-cli-model-bridge/models.d/` | 本机扩展模型清单 |
+| `~/.config/codex-cli-model-bridge/enabled-manifests.json` | 本机启用的内置清单，存在时全量同步只处理列出的模型 |
 | Codex / CPA 各自的配置与认证目录 | 登录、密钥及运行配置 |
 
 个人策略使用完整 JSON，包含 `protected_native_model_ids` 和 `hidden_native_model_ids`。临时指定另一份策略可用 `sync --catalog-policy <path>`，该参数优先级最高。
