@@ -188,6 +188,43 @@ class SyncScopeTests(unittest.TestCase):
         self.assertEqual(result["changes"]["added"], ["deepseek-v4.1-flash"])
         self.assertIsNone(result["enabled_manifests"])
 
+    def test_personal_same_name_override_is_unique_and_idempotent(self):
+        local = self.root / "models.d"
+        local.mkdir()
+        manifest = json.loads(self.manifests["gpt-6-astra"].read_text())
+        manifest["priority"] = 8
+        (local / "gpt-6-astra.json").write_text(json.dumps(manifest))
+        for flags in [[], ["--models", "gpt-6-astra"]]:
+            with self.subTest(flags=flags):
+                self.sync(*flags)
+                entries = json.loads(self.target.read_text())["models"]
+                self.assertEqual(sum(m["slug"] == "gpt-6-astra" for m in entries), 1)
+                self.assertEqual(self.entries()["gpt-6-astra"]["priority"], 8)
+                self.assertEqual(self.sync(*flags)["status"], "unchanged")
+
+    def test_empty_live_models_blocks_without_writing(self):
+        args = bridge.parser().parse_args([
+            "sync", "--config", str(self.config), "--native-catalog", str(self.native),
+            "--catalog", str(self.target), "--catalog-policy", str(self.policy),
+            "--state-dir", str(self.root), "--models", "gpt-6-astra", "--apply"])
+        before = {p: p.read_bytes() for p in [self.target, self.state]}
+        output = io.StringIO()
+        with patch.object(bridge, "SKILL_DIR", self.skill), patch.object(bridge, "DEFAULT_STATE_DIR", self.root), patch.object(
+            bridge, "token_from_provider", return_value=("fixture", None)
+        ), patch.object(bridge, "live_model_ids", return_value=set()), contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as caught:
+                bridge.cmd_sync(args)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(json.loads(output.getvalue())["missing_live_routes"], ["gpt-6-astra"])
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+
+    def test_invalid_existing_catalog_blocks_with_no_overwrite(self):
+        self.write_catalog(self.target, [self.astra, self.astra])
+        before = self.target.read_bytes()
+        result = self.sync(expected=2)
+        self.assertIn("duplicate catalog slug", result["error"])
+        self.assertEqual(self.target.read_bytes(), before)
+
     def test_manifest_paths_scope_is_limited_by_enabled_ids(self):
         """纯函数级验证：启用清单只裁剪内置清单，个人清单始终参与。"""
         skill = self.root / "path-fixture"

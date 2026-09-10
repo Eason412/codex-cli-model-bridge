@@ -84,7 +84,7 @@ class FastTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             output = io.StringIO()
-            with patch.object(bridge.subprocess, "run", side_effect=fake_codex), contextlib.redirect_stdout(output):
+            with patch.object(bridge, "DEFAULT_CODEX_HOME", root), patch.object(bridge.subprocess, "run", side_effect=fake_codex), contextlib.redirect_stdout(output):
                 with self.assertRaises(SystemExit) as result:
                     bridge.cmd_probe(args)
             self.assertEqual(result.exception.code, 0)

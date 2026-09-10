@@ -413,7 +413,10 @@ def manifest_paths(selected: set[str] | None = None, enabled_ids: list[str] | No
     if selected is None and enabled_ids is not None:
         bundled = [path for path in bundled if path.stem in enabled_ids]
     local = DEFAULT_STATE_DIR / "models.d"
-    paths = bundled + (sorted(local.glob("*.json")) if local.exists() else [])
+    index = {path.stem: path for path in bundled}
+    if local.exists():
+        index.update({path.stem: path for path in sorted(local.glob("*.json"))})
+    paths = list(index.values())
     if selected is None:
         return paths
     return [path for path in paths if path.stem in selected]
@@ -1012,7 +1015,8 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
         catalog_ids = {entry["slug"] for entry in catalog_models(catalog_path)}
     except Exception as exc:
         emit({"status": "blocked", "error": f"model catalog is invalid: {type(exc).__name__}"}, 2)
-    if args.default_model and args.default_model not in catalog_ids:
+    effective_model = args.default_model or config.get("model")
+    if effective_model and effective_model not in catalog_ids:
         emit({"status": "blocked", "error": "default model is absent from the proxy catalog"}, 2)
 
     current = config_path.read_text(encoding="utf-8")
@@ -1415,7 +1419,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
             live_ids = live_model_ids(base_url, token, Path(args.models_file) if args.models_file else None)
         except Exception as exc:
             emit({"status": "blocked", "error": f"live model discovery failed: {type(exc).__name__}"}, 2)
-    unavailable = sorted(item["slug"] for item in manifests if live_ids and item["slug"] not in live_ids)
+    unavailable = sorted(item["slug"] for item in manifests if not args.skip_live_check and item["slug"] not in live_ids)
     if unavailable:
         emit({"status": "blocked", "missing_live_routes": unavailable, "secrets_redacted": True}, 2)
     native_path = Path(args.native_catalog).expanduser()
@@ -1427,8 +1431,11 @@ def cmd_sync(args: argparse.Namespace) -> None:
         emit({"status": "blocked", "error": f"catalog policy is invalid: {exc}", "policy": str(policy_path)}, 2)
     hidden_native_ids = set(policy["hidden_native_model_ids"])
     protected_native_ids = set(policy["protected_native_model_ids"])
-    native = catalog_models(native_path)
-    current = catalog_models(target_path) if target_path.exists() else copy.deepcopy(native)
+    try:
+        native = catalog_models(native_path)
+        current = catalog_models(target_path) if target_path.exists() else copy.deepcopy(native)
+    except (OSError, ValueError) as exc:
+        emit({"status": "blocked", "error": f"model catalog is invalid: {exc}"}, 2)
     native_map = {entry["slug"]: entry for entry in native}
     current_map = {entry["slug"]: entry for entry in current}
     state_path = Path(args.state_dir).expanduser() / "state.json"
@@ -1591,6 +1598,8 @@ def probe_catalog_path(args: argparse.Namespace) -> Path:
 
 
 def cmd_probe(args: argparse.Namespace) -> None:
+    if Path(args.config).expanduser().resolve() != (DEFAULT_CODEX_HOME / "config.toml").resolve():
+        emit({"status": "blocked", "error": "alternate --config files are not supported by Codex exec; use the active Codex config and --profile for a named profile"}, 2)
     target_path = probe_catalog_path(args)
     entries = {entry["slug"]: entry for entry in catalog_models(target_path)}
     models = [item.strip() for item in args.models.split(",") if item.strip()]
@@ -1621,6 +1630,7 @@ def cmd_probe(args: argparse.Namespace) -> None:
             ]
             if not args.desktop:
                 command.extend(["--profile", args.profile])
+            command.extend(["--config", "model_catalog_json=" + json.dumps(str(target_path.resolve()))])
             if args.fast:
                 command.extend(["--config", 'service_tier="fast"', "--config", "features.fast_mode=true"])
             if args.shell or args.tool_sequence:
@@ -1773,7 +1783,7 @@ def parser() -> argparse.ArgumentParser:
     desktop.add_argument("--runtime-script", default=str(DEFAULT_TRANSPARENT_RUNTIME))
     desktop.add_argument("--launch-agent", default=str(DEFAULT_LAUNCH_AGENT))
     desktop.add_argument("--node", default=str(default_node()))
-    desktop.add_argument("--default-model", default="gpt-5.6-sol")
+    desktop.add_argument("--default-model", help="Explicitly change the default model; otherwise preserve the current value")
     desktop.add_argument("--expected-sha256")
     desktop.add_argument("--apply", action="store_true")
     desktop.set_defaults(func=cmd_configure_desktop)
@@ -1815,7 +1825,7 @@ def parser() -> argparse.ArgumentParser:
 
     probe = sub.add_parser("probe")
     probe.add_argument("--catalog")
-    probe.add_argument("--config", default=str(DEFAULT_CODEX_HOME / "config.toml"))
+    probe.add_argument("--config", default=str(DEFAULT_CODEX_HOME / "config.toml"), help="Active Codex root config only; alternate files are rejected")
     probe.add_argument("--profile", default=DEFAULT_PROFILE_NAME)
     probe.add_argument("--desktop", action="store_true")
     probe.add_argument("--models", required=True)

@@ -184,6 +184,8 @@ python3 <skill-dir>/scripts/bridge.py probe \
 With `--desktop`, the probe reads the active root `model_catalog_json` from
 `~/.codex/config.toml`; use `--catalog` only as an explicit override.
 
+The checked catalog is passed to `codex exec` as a one-shot `model_catalog_json` override. `--config` must identify the active `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`); arbitrary alternate files are rejected because Codex exec does not load them through this option. For an installed named configuration use `--profile <name>` without `--desktop`. The probe never copies credentials or rewrites the active config.
+
 Direct HTTP probes can diagnose the proxy, but they do not prove that Codex consumed the Provider and model catalog. Completion requires the Codex-level probe.
 
 When a model can chat but Codex reports an empty or incompatible Shell payload, require an actual read-only command event:

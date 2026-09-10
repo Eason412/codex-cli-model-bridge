@@ -4,12 +4,12 @@
     {
       "id": 1,
       "prompt": "把 CLIProxyAPI 里的 Grok 4.6 和 DeepSeek V4 Pro 加到 Codex 模型列表，保留我已有的 MCP 和默认模型。",
-      "expected_output": "Audits thread-provider continuity first, preserves the OpenAI desktop default, writes the proxy into an isolated profile, syncs its managed catalog, probes with codex exec, and reports backups."
+      "expected_output": "Audits the active routing mode, preserves MCP and default model, uses transparent OpenAI routing for the normal macOS Desktop or an isolated profile for Windows/fallback, syncs only requested models, probes the same active mode, and reports backups."
     },
     {
       "id": 2,
       "prompt": "Codex 里的第三方模型更新后不见了，帮我修复，但不要动 WorkBuddy。",
-      "expected_output": "Diagnoses Provider/catalog consumption and indexed thread-provider distribution, restores the dominant history Provider, and keeps third-party routing isolated in a profile."
+      "expected_output": "Diagnoses the active Provider/catalog, indexed history distribution, and live routes without changing WorkBuddy. Repairs the affected desktop-transparent or isolated-profile mode. Verifies the catalog and actual Codex call use the same configuration."
     },
     {
       "id": 3,

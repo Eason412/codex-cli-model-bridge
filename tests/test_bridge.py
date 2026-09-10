@@ -24,6 +24,21 @@ def run_bridge(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def run_probe_fixture(root: Path, *args: str) -> subprocess.CompletedProcess:
+    """Use an isolated active root rather than pretending --config loads it."""
+    spec = __import__("importlib.util").util.spec_from_file_location("probe_fixture", SCRIPT)
+    module = __import__("importlib.util").util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = io.StringIO()
+    with patch.object(module, "DEFAULT_CODEX_HOME", root), contextlib.redirect_stdout(output):
+        parsed = module.parser().parse_args(list(args))
+        try:
+            module.cmd_probe(parsed)
+        except SystemExit as exc:
+            return subprocess.CompletedProcess(args, exc.code, output.getvalue(), "")
+    raise AssertionError("probe must emit a result")
+
+
 def native_template() -> dict:
     return {
         "slug": "gpt-5.6-sol",
@@ -250,7 +265,8 @@ class BridgeTests(unittest.TestCase):
             )
             fake_codex.chmod(0o700)
 
-            proc = run_bridge(
+            proc = run_probe_fixture(
+                root,
                 "probe",
                 "--desktop",
                 "--models",
@@ -287,7 +303,8 @@ class BridgeTests(unittest.TestCase):
             )
             fake_codex.chmod(0o700)
 
-            proc = run_bridge(
+            proc = run_probe_fixture(
+                root,
                 "probe",
                 "--desktop",
                 "--models",
@@ -308,7 +325,8 @@ class BridgeTests(unittest.TestCase):
             config = Path(raw) / "config.toml"
             config.write_text('model = "gpt-5.6-sol"\n', encoding="utf-8")
 
-            proc = run_bridge(
+            proc = run_probe_fixture(
+                Path(raw),
                 "probe",
                 "--desktop",
                 "--models",
