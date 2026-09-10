@@ -408,9 +408,9 @@ def enabled_manifest_ids(path: Path, available: set[str]) -> list[str]:
 
 
 def manifest_paths(selected: set[str] | None = None, enabled_ids: list[str] | None = None) -> list[Path]:
-    """内置清单受启用清单约束；个人扩展清单始终参与；--models 只做最终筛选。"""
+    """显式选择优先；只有全量同步才按启用清单过滤内置模型。"""
     bundled = sorted((SKILL_DIR / "models").glob("*.json"))
-    if enabled_ids is not None:
+    if selected is None and enabled_ids is not None:
         bundled = [path for path in bundled if path.stem in enabled_ids]
     local = DEFAULT_STATE_DIR / "models.d"
     paths = bundled + (sorted(local.glob("*.json")) if local.exists() else [])
@@ -1378,7 +1378,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
         else Path(args.state_dir).expanduser() / "enabled-manifests.json"
     )
     enabled_ids: list[str] | None = None
-    if enabled_path.exists():
+    if selected is None and enabled_path.exists():
         try:
             enabled_ids = enabled_manifest_ids(enabled_path, set(manifest_index()))
         except (OSError, json.JSONDecodeError, ValueError) as exc:

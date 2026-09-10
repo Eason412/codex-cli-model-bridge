@@ -37,10 +37,12 @@ class SyncScopeTests(unittest.TestCase):
                                          {**self.old, "visibility": "list"}])
         self.state.write_text(json.dumps({"managed_model_ids": ["gpt-6-astra"]}))
         self.manifests = {}
+        self.skill = self.root / "skill"
+        (self.skill / "models").mkdir(parents=True)
         for slug in ["gpt-6-astra", "deepseek-v4.1-flash", "claude-opus-4-6-thinking"]:
             manifest = json.loads((SCRIPT.parents[1] / "models/gpt-6-astra.json").read_text())
             manifest.update(slug=slug, display_name=slug)
-            path = self.root / (slug + ".json")
+            path = self.skill / "models" / (slug + ".json")
             path.write_text(json.dumps(manifest))
             self.manifests[slug] = path
 
@@ -63,13 +65,9 @@ class SyncScopeTests(unittest.TestCase):
             "--state-dir", str(self.root), "--enabled-manifests", str(enabled_path),
             "--skip-live-check", "--apply", *extra])
         output = io.StringIO()
-        self.path_calls = []
-        with patch.object(bridge, "manifest_index", side_effect=lambda: {
-            slug: path for slug, path in self.manifests.items()
-        }), patch.object(bridge, "manifest_paths", side_effect=lambda selected, enabled_ids=None: (
-            self.path_calls.append({"selected": selected, "enabled_ids": enabled_ids}),
-            [path for slug, path in self.manifests.items() if selected is None or slug in selected],
-        )[1]), contextlib.redirect_stdout(output):
+        with patch.object(bridge, "SKILL_DIR", self.skill), patch.object(
+            bridge, "DEFAULT_STATE_DIR", self.root
+        ), contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as caught:
                 bridge.cmd_sync(args)
         self.assertEqual(caught.exception.code, expected, output.getvalue())
@@ -108,7 +106,7 @@ class SyncScopeTests(unittest.TestCase):
         self.assertEqual(self.sync()["status"], "unchanged")
 
     def test_missing_managed_manifest_preserved_until_explicit_full_prune(self):
-        del self.manifests["gpt-6-astra"]
+        self.manifests.pop("gpt-6-astra").unlink()
         self.sync()
         self.assertEqual(self.entries()["gpt-6-astra"], self.astra)
         entries = list(self.entries().values()) + [{**self.manual, "slug": "stale"}]
@@ -139,13 +137,13 @@ class SyncScopeTests(unittest.TestCase):
         self.assertEqual(self.entries()["gpt-6-astra"], self.astra)
 
     def test_enabled_manifests_limit_bundled_scope(self):
-        """启用清单解析后交给清单解析；解析函数自身的作用域另行单独验证。"""
+        """使用真实清单解析验证全量同步范围。"""
         self.enabled = json.dumps({"schema_version": 1, "enabled": ["gpt-6-astra"]})
         result = self.sync()
         self.assertEqual(result["enabled_manifests"], ["gpt-6-astra"])
         self.assertEqual(result["sync_scope"], "full")
-        self.assertEqual(self.path_calls[-1]["enabled_ids"], ["gpt-6-astra"])
-        self.assertIsNone(self.path_calls[-1]["selected"])
+        self.assertNotIn("deepseek-v4.1-flash", self.entries())
+        self.assertNotIn("claude-opus-4-6-thinking", self.entries())
         # 该条目由清单重建：必须保留受管覆盖值，而不是退回原生缓存窗口
         self.assertEqual(self.entries()["gpt-6-astra"]["context_window"], 1000000)
         self.assertEqual(self.entries()["gpt-6-astra"]["priority"], 0)
@@ -184,9 +182,15 @@ class SyncScopeTests(unittest.TestCase):
         self.assertEqual(result["changes"]["added"], ["deepseek-v4.1-flash"])
         self.assertEqual({k: self.entries()[k] for k in before}, before)
 
+    def test_explicit_models_does_not_read_invalid_full_sync_preferences(self):
+        self.enabled = "not json"
+        result = self.sync("--models", "deepseek-v4.1-flash")
+        self.assertEqual(result["changes"]["added"], ["deepseek-v4.1-flash"])
+        self.assertIsNone(result["enabled_manifests"])
+
     def test_manifest_paths_scope_is_limited_by_enabled_ids(self):
         """纯函数级验证：启用清单只裁剪内置清单，个人清单始终参与。"""
-        skill = self.root / "skill"
+        skill = self.root / "path-fixture"
         (skill / "models").mkdir(parents=True)
         state = self.root / "state-dir"
         (state / "models.d").mkdir(parents=True)
@@ -200,6 +204,8 @@ class SyncScopeTests(unittest.TestCase):
             self.assertEqual(scoped, {"gpt-6-astra", "glm-5.3-flash"})
             selected = {p.stem for p in bridge.manifest_paths({"glm-5.3-flash"}, ["gpt-6-astra"])}
             self.assertEqual(selected, {"glm-5.3-flash"})
+            selected_bundled = {p.stem for p in bridge.manifest_paths({"gpt-5.6-sol"}, ["gpt-6-astra"])}
+            self.assertEqual(selected_bundled, {"gpt-5.6-sol"})
             with self.assertRaises(OSError) as caught:
                 bridge.enabled_manifest_ids(
                     self.root / "enabled-manifests.json", {"gpt-6-astra"}
