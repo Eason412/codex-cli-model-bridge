@@ -1,0 +1,132 @@
+"""Isolated regressions for catalog scope; never reads personal manifests or APIs."""
+import contextlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from test_bridge import SCRIPT, native_template
+
+spec = importlib.util.spec_from_file_location("bridge_sync", SCRIPT)
+bridge = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bridge)
+
+
+class SyncScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.target = self.root / "catalog.json"
+        self.native = self.root / "native.json"
+        self.config = self.root / "config.toml"
+        self.policy = self.root / "policy.json"
+        self.state = self.root / "state.json"
+        self.config.write_text('model_provider = "openai"\n')
+        self.policy.write_text(json.dumps({"schema_version": 1, "hidden_native_model_ids": ["gpt-5.4"]}))
+        self.astra = {**native_template(), "slug": "gpt-6-astra", "context_window": 1000000,
+                      "max_context_window": 1000000, "priority": 0}
+        self.old = {**native_template(), "slug": "gpt-5.4", "visibility": "hide"}
+        self.manual = {**native_template(), "slug": "manual", "priority": 99}
+        self.write_catalog(self.target, [self.astra, self.old, self.manual])
+        self.write_catalog(self.native, [native_template(), {**native_template(), "slug": "gpt-6-astra"},
+                                         {**self.old, "visibility": "list"}])
+        self.state.write_text(json.dumps({"managed_model_ids": ["gpt-6-astra"]}))
+        self.manifests = {}
+        for slug in ["gpt-6-astra", "deepseek-v4.1-flash", "claude-opus-4-6-thinking"]:
+            manifest = json.loads((SCRIPT.parents[1] / "models/gpt-6-astra.json").read_text())
+            manifest.update(slug=slug, display_name=slug)
+            path = self.root / (slug + ".json")
+            path.write_text(json.dumps(manifest))
+            self.manifests[slug] = path
+
+    def write_catalog(self, path, entries):
+        path.write_text(json.dumps({"models": entries}))
+
+    def entries(self):
+        return {m["slug"]: m for m in json.loads(self.target.read_text())["models"]}
+
+    def sync(self, *extra, expected=0):
+        args = bridge.parser().parse_args([
+            "sync", "--config", str(self.config), "--native-catalog", str(self.native),
+            "--catalog", str(self.target), "--catalog-policy", str(self.policy),
+            "--state-dir", str(self.root),
+            "--skip-live-check", "--apply", *extra])
+        output = io.StringIO()
+        with patch.object(bridge, "manifest_paths", side_effect=lambda selected: [
+            path for slug, path in self.manifests.items() if selected is None or slug in selected
+        ]), contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as caught:
+                bridge.cmd_sync(args)
+        self.assertEqual(caught.exception.code, expected, output.getvalue())
+        return json.loads(output.getvalue())
+
+    def test_deepseek_then_opus_preserve_all_unselected_entries_and_ownership(self):
+        for slug in ["deepseek-v4.1-flash", "claude-opus-4-6-thinking"]:
+            before = self.entries()
+            result = self.sync("--models", slug)
+            after = self.entries()
+            self.assertEqual({k: after[k] for k in before}, before)
+            self.assertEqual(result["changes"]["added"], [slug])
+            self.assertEqual(result["changes"]["updated"], [])
+            self.assertIn("gpt-6-astra", result["managed_after"])
+            snapshot = self.target.read_bytes()
+            self.assertEqual(self.sync("--models", slug)["status"], "unchanged")
+            self.assertEqual(self.target.read_bytes(), snapshot)
+
+    def test_subset_preserves_native_override_even_without_ownership_record(self):
+        self.state.write_text('{"managed_model_ids": []}')
+        self.sync("--models", "deepseek-v4.1-flash")
+        self.assertEqual(self.entries()["gpt-6-astra"], self.astra)
+        self.assertNotIn("gpt-5.6-sol", self.entries())
+
+    def test_full_sync_refreshes_unmanaged_native_and_reports_policy_fields(self):
+        self.write_catalog(self.target, [self.astra, {**self.old, "visibility": "list"},
+                                        self.manual, {**native_template(), "context_window": 123}])
+        result = self.sync()
+        entries = self.entries()
+        self.assertEqual(entries["gpt-6-astra"]["context_window"], 1000000)
+        self.assertEqual(entries["gpt-5.6-sol"]["context_window"], 272000)
+        self.assertEqual(entries["manual"], self.manual)
+        self.assertEqual(entries["gpt-5.4"]["visibility"], "hide")
+        self.assertEqual(result["field_changes"]["gpt-5.4"]["visibility"]["after"], "hide")
+        self.assertIn("gpt-5.6-sol", result["changes"]["updated"])
+        self.assertEqual(self.sync()["status"], "unchanged")
+
+    def test_missing_managed_manifest_preserved_until_explicit_full_prune(self):
+        del self.manifests["gpt-6-astra"]
+        self.sync()
+        self.assertEqual(self.entries()["gpt-6-astra"], self.astra)
+        entries = list(self.entries().values()) + [{**self.manual, "slug": "stale"}]
+        self.write_catalog(self.target, entries)
+        state = json.loads(self.state.read_text())
+        state["managed_model_ids"].append("stale")
+        self.state.write_text(json.dumps(state))
+        result = self.sync("--prune-managed")
+        self.assertEqual(self.entries()["gpt-6-astra"]["context_window"], 272000)
+        self.assertNotIn("gpt-6-astra", result["managed_after"])
+        self.assertEqual(result["changes"]["removed"], ["stale"])
+        self.assertIn("gpt-6-astra", result["changes"]["updated"])
+        self.assertEqual(self.entries()["manual"], self.manual)
+
+    def test_subset_prune_rejected_without_writes(self):
+        before = {p: p.read_bytes() for p in [self.target, self.state]}
+        self.sync("--models", "deepseek-v4.1-flash", "--prune-managed", expected=2)
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+
+    def test_explicit_supersedes_removes_alias_and_reports_it(self):
+        path = self.manifests["deepseek-v4.1-flash"]
+        manifest = json.loads(path.read_text())
+        manifest["supersedes"] = ["manual"]
+        path.write_text(json.dumps(manifest))
+        result = self.sync("--models", "deepseek-v4.1-flash")
+        self.assertEqual(result["changes"]["removed"], ["manual"])
+        self.assertNotIn("manual", self.entries())
+        self.assertEqual(self.entries()["gpt-6-astra"], self.astra)
+
+
+if __name__ == "__main__":
+    unittest.main()

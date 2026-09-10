@@ -1335,6 +1335,8 @@ def cmd_sync(args: argparse.Namespace) -> None:
     if not is_loopback(base_url):
         emit({"status": "blocked", "error": "active Provider is not loopback-only"}, 2)
     selected = {item.strip() for item in args.models.split(",") if item.strip()} if args.models else None
+    if selected is not None and args.prune_managed:
+        emit({"status": "blocked", "error": "--models cannot be combined with --prune-managed; pruning requires a full sync"}, 2)
     paths = manifest_paths(selected)
     manifests: list[dict] = []
     manifest_errors: dict[str, list[str]] = {}
@@ -1406,34 +1408,57 @@ def cmd_sync(args: argparse.Namespace) -> None:
         )
     kept: list[dict] = []
     desired_ids = set(desired)
-    for entry in native:
+    for entry in ([] if selected is not None else native):
         if entry["slug"] not in desired_ids and entry["slug"] not in superseded:
-            native_entry = copy.deepcopy(entry)
+            slug = entry["slug"]
+            # A missing manifest is not permission to reset a managed override.
+            native_entry = copy.deepcopy(
+                current_map[slug]
+                if slug in managed_before and slug in current_map and not args.prune_managed
+                else entry
+            )
             if native_entry["slug"] in hidden_native_ids:
                 native_entry["visibility"] = "hide"
             kept.append(native_entry)
     for entry in current:
         slug = entry["slug"]
-        if slug in native_map or slug in desired_ids or slug in superseded:
+        if slug in superseded:
+            continue
+        if selected is not None:
+            kept.append(copy.deepcopy(desired[slug] if slug in desired_ids else entry))
+            continue
+        if slug in native_map or slug in desired_ids:
             continue
         if slug in managed_before and args.prune_managed:
             continue
         kept.append(copy.deepcopy(entry))
-    final_models = kept + [desired[manifest["slug"]] for manifest in manifests]
+    kept_ids = {entry["slug"] for entry in kept}
+    final_models = kept + [desired[manifest["slug"]] for manifest in manifests if manifest["slug"] not in kept_ids]
     final_map = {entry["slug"]: entry for entry in final_models}
     final_payload = {"models": final_models}
     current_payload = {"models": current}
-    added = sorted(slug for slug in desired if slug not in current_map)
-    updated_ids = sorted(slug for slug in desired if slug in current_map and current_map[slug] != desired[slug])
-    removed = sorted(
-        slug for slug in managed_before if args.prune_managed and slug not in desired_ids and slug in current_map
-    )
-    unchanged = sorted(slug for slug in desired if slug in current_map and current_map[slug] == desired[slug])
+    added = sorted(final_map.keys() - current_map.keys())
+    updated_ids = sorted(slug for slug in final_map.keys() & current_map.keys() if current_map[slug] != final_map[slug])
+    removed = sorted(current_map.keys() - final_map.keys())
+    unchanged = sorted(slug for slug in final_map.keys() & current_map.keys() if current_map[slug] == final_map[slug])
+    field_changes = {
+        slug: {
+            field: {"before": current_map[slug].get(field), "after": final_map[slug].get(field),
+                    "before_present": field in current_map[slug], "after_present": field in final_map[slug]}
+            for field in sorted(current_map[slug].keys() | final_map[slug].keys())
+            if (field in current_map[slug]) != (field in final_map[slug]) or current_map[slug].get(field) != final_map[slug].get(field)
+        }
+        for slug in updated_ids
+    }
+    managed_after = desired_ids if args.prune_managed else desired_ids | (managed_before & final_map.keys())
     changed = final_payload != current_payload
     result = {
         "status": "planned" if not args.apply else "unchanged",
         "catalog": str(target_path),
         "changes": {"added": added, "updated": updated_ids, "removed": removed, "unchanged": unchanged},
+        "field_changes": field_changes,
+        "order_changed": [entry["slug"] for entry in current] != [entry["slug"] for entry in final_models],
+        "sync_scope": "subset" if selected is not None else "full",
         "superseded_routes": sorted(superseded),
         "catalog_policy": str(policy_path),
         "protected_native_models": sorted(protected_native_ids & set(native_map)),
@@ -1442,7 +1467,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
             slug for slug in hidden_native_ids if final_map.get(slug, {}).get("visibility") == "hide"
         ),
         "hidden_native_models_not_found": sorted(hidden_native_ids - set(native_map)),
-        "managed_after": sorted(desired_ids | (managed_before - set(removed))),
+        "managed_after": sorted(managed_after),
         "backup": None,
         "live_routes_verified": not args.skip_live_check,
         "secrets_redacted": True,
