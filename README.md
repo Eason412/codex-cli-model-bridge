@@ -2,7 +2,7 @@
 
 面向 CLIProxyAPI（CPA）的 Codex 模型接入与配置维护 Skill，支持 Coding Plan／订阅模型接入、Provider 检查、模型目录同步、本地透明代理和调用验证。
 
-当前版本：[V0.0.1](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.1) · [更新日志](changelogs/V0.0.1.md)
+当前版本：[V0.0.2](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.2) · [更新日志](changelogs/V0.0.2.md)
 
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
@@ -182,6 +182,8 @@ python3 scripts/bridge.py probe --desktop --models "<model-id>"
 ```
 
 独立配置模式省略 `--desktop`。探测会实际调用模型，消耗对应服务额度；`--shell` 检查真实命令事件，`--tool-sequence` 检查连续工具调用。
+
+`--catalog` 指定的目录会实际传入 Codex。`--config` 仅接受当前 Codex 根配置路径，其他文件会明确报错；使用已安装的命名配置时，省略 `--desktop` 并传 `--profile <name>`。
 
 ### 子代理任务传递验证
 
