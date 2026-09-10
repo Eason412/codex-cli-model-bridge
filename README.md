@@ -2,6 +2,8 @@
 
 面向 CLIProxyAPI（CPA）的 Codex 模型接入与配置维护 Skill，支持 Coding Plan／订阅模型接入、Provider 检查、模型目录同步、本地透明代理和调用验证。
 
+当前版本：[V0.0.1](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.1) · [更新日志](changelogs/V0.0.1.md)
+
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
 Skill 负责配置维护，透明代理和 CPA 负责运行时请求转发。默认请求链路：
