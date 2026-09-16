@@ -203,6 +203,8 @@ This passes only when Codex records a successful `pwd` command execution; a mode
 
 For spawn failures, context inheritance, unexpected child models, plugin routes, or CPA upgrades, read [spawn-compatibility.md](references/spawn-compatibility.md). Use the actual runtime tool schema; do not treat model examples in tool descriptions as the complete allowlist.
 
+For Antigravity `429 RESOURCE_EXHAUSTED` when a minimal request succeeds but a normal Codex or subagent request fails, follow that reference's content-related 429 diagnosis before assuming exhausted quota. Persistent memory can contribute triggering text even with `fork_turns="none"`; do not disable or rewrite global memory as an automatic repair.
+
 Codex Multi-Agent v2 uses a private Responses input item named `agent_message`. Native OpenAI/Codex routes accept it, while xAI and other third-party Responses endpoints may reject it with HTTP 422 and `ModelInput`. CLIProxyAPI 7.2.125+ contains the compatibility transform; do not duplicate this protocol rewrite in the transparent header proxy.
 
 Preview and enable it in the canonical CLIProxyAPI config:

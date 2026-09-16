@@ -28,6 +28,28 @@ Symptoms include HTTP 422 / `ModelInput`, or a child that starts successfully bu
 
 Historical case, 2026-09-07: a WorkBuddy-backed GLM route lost the task in the plugin executor while ordinary chat succeeded. A local fix changed `internal/pluginhost/adapters_executors.go` to reuse `helps.TranslateRequestWithCodexMultiAgentV2` across execution paths. Regression coverage included stream/non-stream delivery, ordering, duplication, compatibility-disabled behavior, and non-Codex callers. Bare upstream v7.2.152 did not contain that fix when inspected. Recheck the target release before applying or retaining a patch; the patch itself is not distributed by this Skill.
 
+## Antigravity content-related 429
+
+CPA maintainer guidance: [issue #5848](https://github.com/router-for-me/CLIProxyAPI/issues/5848#issuecomment-5681658621), with a related [subagent report #5695](https://github.com/router-for-me/CLIProxyAPI/issues/5695). The maintainer describes some system-text rejections as masked `429 RESOURCE_EXHAUSTED`, not actual quota exhaustion. This is not an explanation for every 429; distinguish explicit quota/reset information, cooldown, network errors and region-related 400 responses.
+
+1. Verify the actual CPA executable and current upstream error. Compare a minimal request and the failing request on the same route and reasoning effort. If account pinning is unavailable, record that round-robin remains a confounder rather than claiming a fixed-account experiment.
+2. Reduce a private copy of the failing request to isolate the triggering system-text phrase. Preserve the original for the final replay. Removing instructions or tools is a diagnostic control, not a production workaround. Keep prompts, credentials and raw logs out of public reports.
+3. Check system text originating from persistent memory as well as base instructions. In a September 2026 reproduction, a memory summary quoted an identity sentence that an existing prefix-only correction did not cover. Changing only that quotation made the otherwise unchanged request complete.
+4. When the phrase is confirmed and configuration changes are authorized, back up CPA configuration and merge the phrase into the existing `antigravity.sensitive-words` list. Do not duplicate the provider block or replace existing entries:
+
+   ```yaml
+   antigravity:
+     sensitive-words:
+       - "<exact phrase isolated by the controlled test>"
+   ```
+
+   Replace the placeholder with the demonstrated phrase; do not install a broad guessed keyword list. CPA's built-in mechanism inserts zero-width characters into matched Antigravity system-instruction text. It does not edit local memory files, but it does change outgoing text. Check tasks needing exact quotations accordingly. This Skill documents the mechanism; `bridge.py` does not automatically configure it, and the transparent proxy must not grow a second implementation.
+5. Verify hot reload where supported; do not restart a healthy service merely to test this configuration. Replay the original full request, then run a real spawn with the normal role and memory injection retained. Verify model/effort, actual tool output and final response. A 200 or a started child alone is insufficient. Roll back only the newly added entry if it does not help; retain real quota/cooldown controls.
+
+Memory isolation is a separate feature. `fork_turns="none"` does not promise absence of memory. A tested custom role with `memories.use_memories=false` still received a memory summary on one V2 runtime; do not generalize this to all versions or claim isolation from configuration alone. Inspect the actual child request. Cached desktop role lists may also reject a newly added role, independently of memory behavior.
+
+Sanitized acceptance, 2026-09-16: on a locally patched CPA v7.3.3 deployment, adding one confirmed phrase through the existing configuration made the original failing request complete. Four real `gemini-3.8-flash / high / v2` worker spawns, with memory still injected, executed `pwd` and returned the requested markers. This establishes that deployment's tested path, not a universal fix, upstream capacity guarantee, or validation of an unpatched binary.
+
 ## Verification sequence
 
 `probe-multi-agent` sends a synthetic protocol item and checks a random task marker in the completed assistant response. It does not exercise native spawn, role selection, context forking, or parent/child coordination.
