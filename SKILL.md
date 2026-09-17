@@ -201,6 +201,8 @@ This passes only when Codex records a successful `pwd` command execution; a mode
 
 ### 7.1 Repair Codex Multi-Agent input for third-party models
 
+For Kimi native Responses returning 400 only on delegated tasks, check the Kimi-specific entry-point gap and optional CPA source patch in [spawn-compatibility.md](references/spawn-compatibility.md#kimi-native-responses-agent-message-400). Do not assume this is an Antigravity text-filter failure or change the model's tool mode without a controlled test.
+
 For spawn failures, context inheritance, unexpected child models, plugin routes, or CPA upgrades, read [spawn-compatibility.md](references/spawn-compatibility.md). Use the actual runtime tool schema; do not treat model examples in tool descriptions as the complete allowlist.
 
 For Antigravity `429 RESOURCE_EXHAUSTED` when a minimal request succeeds but a normal Codex or subagent request fails, follow that reference's content-related 429 diagnosis before assuming exhausted quota. Persistent memory can contribute triggering text even with `fork_turns="none"`; do not disable or rewrite global memory as an automatic repair.

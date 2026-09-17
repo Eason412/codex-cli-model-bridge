@@ -1,0 +1,98 @@
+diff --git a/internal/runtime/executor/kimi_executor.go b/internal/runtime/executor/kimi_executor.go
+index 654ade8..cba3491 100644
+--- a/internal/runtime/executor/kimi_executor.go
++++ b/internal/runtime/executor/kimi_executor.go
+@@ -390,6 +390,9 @@ func (e *KimiExecutor) executeResponses(ctx context.Context, auth *cliproxyauth.
+ 	defer reporter.TrackFailure(ctx, &err)
+ 
+ 	body := bytes.Clone(req.Payload)
++	// Kimi accepts standard Responses messages, not Codex's private agent_message.
++	// Reuse the client/config-gated conversion without changing native Codex routes.
++	body = helps.RewriteCodexMultiAgentV2Input(ctx, opts.Headers, body, e.cfg)
+ 	upstreamModel := normalizeKimiUpstreamModel(baseModel)
+ 	var errSet error
+ 	body, errSet = sjson.SetBytes(body, "model", upstreamModel)
+@@ -499,6 +502,8 @@ func (e *KimiExecutor) executeResponsesStream(ctx context.Context, auth *cliprox
+ 	defer reporter.TrackFailure(ctx, &err)
+ 
+ 	body := bytes.Clone(req.Payload)
++	// Keep streaming and non-streaming delegation payloads on the same dialect.
++	body = helps.RewriteCodexMultiAgentV2Input(ctx, opts.Headers, body, e.cfg)
+ 	upstreamModel := normalizeKimiUpstreamModel(baseModel)
+ 	var errSet error
+ 	body, errSet = sjson.SetBytes(body, "model", upstreamModel)
+diff --git a/internal/runtime/executor/kimi_agent_message_test.go b/internal/runtime/executor/kimi_agent_message_test.go
+new file mode 100644
+index 0000000..afc2064
+--- /dev/null
++++ b/internal/runtime/executor/kimi_agent_message_test.go
+@@ -0,0 +1,69 @@
++package executor
++
++import (
++	"context"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
++	auth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
++	exec "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
++	translator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
++	"github.com/tidwall/gjson"
++)
++
++// Exercise the real Kimi Responses entry points, including the opt-out boundary.
++func TestKimiResponsesAgentMessageCompatibility(t *testing.T) {
++	for _, stream := range []bool{false, true} {
++		for _, enabled := range []bool{false, true} {
++			for _, client := range []string{"codex_cli_rs/0.154.0", "unrelated-client"} {
++				cfg := &config.Config{}
++				cfg.Codex.OptimizeMultiAgentV2 = enabled
++				var body []byte
++				ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", kimiRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
++					body, _ = io.ReadAll(r.Body)
++					data := `{"id":"resp_test","object":"response","status":"completed","output":[]}`
++					if stream {
++						data = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\n"
++					}
++					return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(data))}, nil
++				}))
++				payload := []byte(`{"model":"kimi-k3","input":[{"type":"agent_message","content":[{"type":"encrypted_content","encrypted_content":"task marker"}]},{"type":"message","role":"user","content":"unchanged"}]}`)
++				req := exec.Request{Model: "kimi-k3", Payload: payload}
++				opts := exec.Options{SourceFormat: translator.FormatOpenAIResponse, Headers: http.Header{"User-Agent": []string{client}}}
++				a := &auth.Auth{Metadata: map[string]any{"access_token": "test-token"}}
++				e := NewKimiExecutor(cfg)
++				if stream {
++					result, err := e.ExecuteStream(ctx, a, req, opts)
++					if err != nil {
++						t.Fatal(err)
++					}
++					for c := range result.Chunks {
++						if c.Err != nil {
++							t.Fatal(c.Err)
++						}
++					}
++				} else {
++					if _, err := e.Execute(ctx, a, req, opts); err != nil {
++						t.Fatal(err)
++					}
++				}
++				want := "agent_message"
++				if enabled && strings.HasPrefix(client, "codex_cli_rs") {
++					want = "message"
++					if gjson.GetBytes(body, "input.0.role").String() != "user" || gjson.GetBytes(body, "input.0.content.0.text").String() != "task marker" {
++						t.Fatal("delegation text lost")
++					}
++				}
++				if gjson.GetBytes(body, "input.0.type").String() != want {
++					t.Fatalf("stream=%v enabled=%v client=%s: wrong item type", stream, enabled, client)
++				}
++				if gjson.GetBytes(body, "input.1.content").String() != "unchanged" {
++					t.Fatal("ordinary message changed")
++				}
++			}
++		}
++	}
++}
