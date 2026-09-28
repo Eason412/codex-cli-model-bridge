@@ -6,7 +6,7 @@
 - **Non-loopback Provider**: stop before rebinding; changing an existing shared endpoint can break other clients.
 - **Credential helper failure**: verify the helper is owner-only and CLIProxyAPI contains a client key. Do not print helper output.
 - **Route absent**: repair or authorize the upstream Provider before touching the Codex catalog.
-- **`unknown provider for model gpt-5.6-sol`**: CLIProxyAPI returned HTTP 400 because WorkBuddy Fast aliases replaced the native Codex ID. Keep `oauth-model-alias` entries for `gpt-5.6-sol-standard` / `gpt-5.6-sol-fast` with `fork: true` so the original `gpt-5.6-sol` route stays listed. Do not point Codex at `gpt-5.6-sol-standard`; App Thread and `create_thread` still need the native slug.
+- **`unknown provider for model gpt-5.6-sol`**: CLIProxyAPI returned HTTP 400 because Fast aliases replaced the native Codex ID. Keep `oauth-model-alias` entries for `gpt-5.6-sol-standard` / `gpt-5.6-sol-fast` with `fork: true` so the original `gpt-5.6-sol` route stays listed. Do not point Codex at `gpt-5.6-sol-standard`; App Thread and `create_thread` still need the native slug.
 - **`unknown provider for model grok-4.6` during a live Grok repair**: this is usually a mid-session CLIProxyAPI restart, not a missing Grok alias. Do not restart the proxy again from a Grok session; wait for `/v1/models` to list `grok-4.6` and continue.
 - **Catalog collision**: preserve the manual entry. Use `--adopt` only after the user confirms this Skill should own that exact slug.
 - **Listed but `codex exec` fails**: the route is not proven Responses-compatible; inspect proxy errors and do not declare success.

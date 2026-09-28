@@ -47,7 +47,7 @@ Keep root `model_provider = "openai"` and the existing merged catalog. Do not ru
 ## What not to do
 
 - Do not change the Desktop default Provider to `ZAI` or `cli_proxy`.
-- Do not register GLM only in CLIProxyAPI and expect the Router picker to show it. WorkBuddy uses `:8317`; Desktop Router uses `:4202`.
+- Do not register GLM only in CLIProxyAPI and expect the Router picker to show it. CLIProxyAPI uses `:8317`; Desktop Router uses `:4202`.
 - Do not reinstall Router or switch its Node binary as part of adding GLM.
 - Do not copy the key into `experimental_bearer_token`.
 - Do not add `glm-5.3` to this Skill's `models/*.json` catalog for a Router-owned Desktop. That catalog is for the isolated CLIProxyAPI profile / 8318 path.

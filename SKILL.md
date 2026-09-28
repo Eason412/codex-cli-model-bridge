@@ -1,11 +1,11 @@
 ---
 name: codex-cli-model-bridge
-description: Configure or troubleshoot Codex custom Providers, proxy model catalogs, and Codex–WorkBuddy model synchronization. Use for local bridge or picker setup and repair, including proxy Fast-mode routing; not for model news, comparisons, or a mere model-name mention.
+description: Configure or troubleshoot Codex custom Providers and proxy model catalogs. Use for local bridge or picker setup and repair, including proxy Fast-mode routing; not for model news, comparisons, or a mere model-name mention.
 ---
 
 # Codex CLI Model Bridge
 
-Manage subscription-backed or local proxy models in Codex without treating Codex like WorkBuddy. Codex uses a Responses API Provider plus a model catalog; WorkBuddy uses independent JSON entries. Share CLIProxyAPI infrastructure and verified Provider facts, but keep each application's writer and state separate.
+Manage subscription-backed or local proxy models in Codex. Codex uses a Responses API Provider plus a model catalog; keep its writer and state separate from other applications that share CLIProxyAPI.
 
 Codex selects one `model_provider` for a task. Model catalog entries do not carry per-model Provider routing. Preserve the Provider identity that owns the majority of indexed task history (normally `openai`). For normal Desktop use, the supported bridge design keeps `model_provider = "openai"`, keeps ChatGPT subscription auth intact, and points the built-in Provider's `openai_base_url` at an owner-only loopback header-rewriting proxy. CLIProxyAPI then routes native GPT subscription models and verified third-party models behind one catalog without changing the task Provider identity. Keep the isolated `$CODEX_HOME/cli-proxy.config.toml` profile as the default path on Windows and as a fallback everywhere else.
 
@@ -101,7 +101,7 @@ Full sync refreshes unmanaged native metadata from Codex's cache and generates m
 
 The shared picker policy lives at `<skill-dir>/policies/catalog.json`. Keep personal preferences in `~/.config/codex-cli-model-bridge/catalog-policy.json`, which takes precedence when present; an explicit `--catalog-policy` takes highest priority. These are complete policy files, not partial overlays: retain the protected IDs when creating a personal copy. IDs in `hidden_native_model_ids` remain in the catalog with Codex's native `visibility = "hide"` semantics, so existing tasks and routes keep working while those entries disappear from the model picker. Change the selected policy instead of hand-editing the generated catalog; full sync reapplies it after a Codex update refreshes `models_cache.json`.
 
-IDs in `protected_native_model_ids` must also remain under their exact native slugs. Codex App `create_thread` validates those IDs independently of cosmetic catalog aliases, so a managed manifest must never `supersede` them. Represent Fast through the service tier; do not replace `gpt-5.6-sol` with a `*-standard` picker alias. If WorkBuddy needs extra Fast/standard aliases, CLIProxyAPI `oauth-model-alias` must set `fork: true` so the native slug stays in live `/v1/models`. Audit fails when a listed catalog model or the current default model is missing from that live list.
+IDs in `protected_native_model_ids` must also remain under their exact native slugs. Codex App `create_thread` validates those IDs independently of cosmetic catalog aliases, so a managed manifest must never `supersede` them. Represent Fast through the service tier; do not replace `gpt-5.6-sol` with a `*-standard` picker alias. Audit fails when a listed catalog model or the current default model is missing from that live list.
 
 Native entries copied into the bridge catalog are metadata only. In isolated-profile mode they route through `cli_proxy`; in Desktop-transparent mode they route through the built-in `openai` Provider identity and its loopback `openai_base_url`. The catalog itself never chooses the Provider.
 
@@ -250,7 +250,7 @@ Report:
 1. Audit and distinguish history-scope mismatch, invalid TOML, proxy-down, helper/auth failure, missing route, invalid profile catalog, stale task, and Provider protocol mismatch.
 2. Restore the dominant history Provider before model work; do not rewrite task rows.
 3. Repair the smallest failing layer; do not reinstall a healthy proxy.
-4. Re-authorize upstream Providers with the WorkBuddy bridge only when CLIProxyAPI authentication is actually absent or rejected.
+4. Re-authorize the affected upstream account in CLIProxyAPI only when its authentication is actually absent or rejected.
 5. Re-run profile catalog sync and the affected Codex-level probes.
 6. Verify normal desktop history remains visible under the default Provider.
 

@@ -27,13 +27,6 @@ Codex → 本地透明代理 → CLIProxyAPI → Coding Plan／订阅模型服�
 | Grok | `grok-4.6` |
 | GPT | `gpt-6-astra`；其他原生条目从 Codex 模型缓存继承 |
 
-通过仓外 `models.d/` 扩展清单，还可配置以下 CPA 插件路由：
-
-| 系列 | 模型 ID | 接入方式 |
-| --- | --- | --- |
-| GLM | `glm-5.3-flash` | WorkBuddy 账号 → CPA 插件 |
-| 混元 | `hy4-preview` | WorkBuddy 账号 → CPA 插件 |
-
 Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划与授权方式取决于配置的上游：例如 DeepSeek 清单使用 OpenCode Go 路由描述，GLM Coding Plan 的配置见 [接入参考](references/glm-coding-plan.md)。Skill 使用 CPA 暴露的模型 ID，不保存上游账号凭据。
 
 模型可用性以 CPA 的 `/v1/models` 和实际 Codex 探测结果为准；表中列出的是已提供清单或扩展配置的型号。
@@ -53,7 +46,7 @@ Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划�
 
 需要 Python 3.11+、已安装的 Codex CLI，以及已配置上游认证、可在本机访问的 CLIProxyAPI。透明代理模式另需 Node.js。
 
-Python 主脚本使用标准库；仓库不包含 CPA 服务、WorkBuddy 插件或上游账号配置。CPA 的安装与模型接入见 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)。
+Python 主脚本使用标准库；仓库不包含 CPA 服务或上游账号配置。CPA 的安装与模型接入见 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)。
 
 ### CPA 安装与初始化
 
