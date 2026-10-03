@@ -114,6 +114,23 @@ class RootSafetyTests(unittest.TestCase):
                                'model_catalog_json = ' + json.dumps(str(self.catalog)) + '\n')
         self.runtime.write_text((SCRIPT.parent / "transparent_proxy.mjs").read_text())
 
+    def test_restore_selects_native_priority_without_changing_valid_selection(self):
+        entries = [{**native_template(), "priority": 50},
+                   {**native_template(), "slug": "native-top", "priority": 0},
+                   {**native_template(), "slug": "native-other", "priority": 2}]
+        self.native.write_text(json.dumps({"models": entries}))
+        self.config.write_text('model = "custom"\nmodel_provider = "cli_proxy"\n')
+        result, _ = self.invoke(self.base("restore-default"))
+        self.assertEqual(result["target_model"], "native-top")
+        self.assertIn('+model = "native-top"', result["diff"])
+        result, _ = self.invoke(self.base("restore-default") + ["--model", "native-other"])
+        self.assertEqual(result["target_model"], "native-other")
+        self.native.write_text('{"models": []}')
+        before = self.config.read_bytes()
+        result, _ = self.invoke(self.base("restore-default"), expected=2)
+        self.assertIn("empty", result["error"])
+        self.assertEqual(self.config.read_bytes(), before)
+
     def test_healthy_unchanged_desktop_does_not_write_or_start(self):
         self.configured_desktop()
         with patch.object(bridge, "wait_for_transparent_proxy", return_value=True), patch.object(

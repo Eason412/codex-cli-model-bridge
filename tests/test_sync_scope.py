@@ -225,6 +225,14 @@ class SyncScopeTests(unittest.TestCase):
         self.assertIn("duplicate catalog slug", result["error"])
         self.assertEqual(self.target.read_bytes(), before)
 
+    def test_sync_reports_fallback_without_persisting_receipt_metadata_in_catalog(self):
+        self.write_catalog(self.native, [{**native_template(), "slug": "native-current", "priority": 0}])
+        result = self.sync("--models", "deepseek-v4.1-flash")
+        self.assertEqual(result["template_fallbacks"], {
+            "deepseek-v4.1-flash": {"requested": "gpt-5.6-sol", "selected": "native-current"}})
+        self.assertNotIn("template_fallbacks", self.entries()["deepseek-v4.1-flash"])
+        self.assertEqual(self.sync("--models", "deepseek-v4.1-flash")["status"], "unchanged")
+
     def test_manifest_paths_scope_is_limited_by_enabled_ids(self):
         """纯函数级验证：启用清单只裁剪内置清单，个人清单始终参与。"""
         skill = self.root / "path-fixture"

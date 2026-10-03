@@ -128,7 +128,7 @@ class BridgeTests(unittest.TestCase):
             with patch.object(module, "DEFAULT_STATE_DIR", root):
                 self.assertEqual(module.default_catalog_policy(), module.DEFAULT_CATALOG_POLICY)
                 local.write_text(json.dumps({"schema_version": 1, "hidden_native_model_ids": ["gpt-5.4"]}), encoding="utf-8")
-                self.assertEqual(module.parser().parse_args(["sync"]).catalog_policy, str(local))
+                self.assertIsNone(module.parser().parse_args(["sync"]).catalog_policy)
                 explicit = root / "alternate.json"
                 parsed = module.parser().parse_args(["sync", "--catalog-policy", str(explicit)])
                 self.assertEqual(parsed.catalog_policy, str(explicit))

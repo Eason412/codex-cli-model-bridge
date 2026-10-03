@@ -374,12 +374,12 @@ def protected_supersede_conflicts(manifests: list[dict], policy: dict) -> list[s
     return sorted(protected & superseded)
 
 
-def manifest_index() -> dict[str, Path]:
+def manifest_index(state_dir: Path | None = None) -> dict[str, Path]:
     """本机可用的清单：仓库内置清单 + 个人扩展清单，后者同名时优先。"""
     index: dict[str, Path] = {}
     for path in sorted((SKILL_DIR / "models").glob("*.json")):
         index[path.stem] = path
-    local = DEFAULT_STATE_DIR / "models.d"
+    local = (state_dir if state_dir is not None else DEFAULT_STATE_DIR) / "models.d"
     if local.exists():
         for path in sorted(local.glob("*.json")):
             index[path.stem] = path
@@ -407,12 +407,13 @@ def enabled_manifest_ids(path: Path, available: set[str]) -> list[str]:
     return enabled
 
 
-def manifest_paths(selected: set[str] | None = None, enabled_ids: list[str] | None = None) -> list[Path]:
+def manifest_paths(selected: set[str] | None = None, enabled_ids: list[str] | None = None,
+                   state_dir: Path | None = None) -> list[Path]:
     """显式选择优先；只有全量同步才按启用清单过滤内置模型。"""
     bundled = sorted((SKILL_DIR / "models").glob("*.json"))
     if selected is None and enabled_ids is not None:
         bundled = [path for path in bundled if path.stem in enabled_ids]
-    local = DEFAULT_STATE_DIR / "models.d"
+    local = (state_dir if state_dir is not None else DEFAULT_STATE_DIR) / "models.d"
     index = {path.stem: path for path in bundled}
     if local.exists():
         index.update({path.stem: path for path in sorted(local.glob("*.json"))})
@@ -472,10 +473,24 @@ def reasoning_levels(efforts: list[str]) -> list[dict]:
     return [{"effort": effort, "description": descriptions[effort]} for effort in efforts]
 
 
-def build_entry(manifest: dict, templates: dict[str, dict]) -> dict:
+def preferred_native_model(models: list[dict]) -> dict:
+    """Codex picker priority is ascending; use a stable slug tie-breaker."""
+    if not models:
+        raise ValueError("native model cache is empty")
+    return min(models, key=lambda entry: (
+        entry.get("priority") if isinstance(entry.get("priority"), (int, float)) else float("inf"),
+        entry["slug"],
+    ))
+
+
+def build_entry(manifest: dict, templates: dict[str, dict],
+                template_fallbacks: dict[str, dict[str, str]] | None = None) -> dict:
     template_slug = manifest["template_slug"]
     if template_slug not in templates:
-        raise ValueError(f"template model is missing: {template_slug}")
+        replacement = preferred_native_model(list(templates.values()))["slug"]
+        if template_fallbacks is not None:
+            template_fallbacks[manifest["slug"]] = {"requested": template_slug, "selected": replacement}
+        template_slug = replacement
     entry = copy.deepcopy(templates[template_slug])
     # 速度档位属于具体模型，不能从通用模板借用，也不能在覆盖原生模型时清空。
     # 同名原生条目提供默认值；清单中的显式覆盖（包括空数组）优先。
@@ -1168,10 +1183,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
             findings.append("custom Provider wire_api is not responses")
         token, token_error = token_from_provider(provider) if provider else (None, "Provider missing")
     live_ids: set[str] = set()
+    discovery_succeeded = False
     live_error = token_error
     if token and base_url:
         try:
             live_ids = live_model_ids(base_url, token, Path(args.models_file) if args.models_file else None)
+            discovery_succeeded = True
             live_error = None
         except Exception as exc:  # errors are redacted to type/status only
             live_error = f"{type(exc).__name__}"
@@ -1192,7 +1209,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
     managed = sorted(set(state.get("managed_model_ids", []))) if isinstance(state, dict) else []
     catalog_entries = catalog_models(catalog_path) if catalog_path and not catalog_error else []
     required_routes = required_live_routes(catalog_entries, managed, config.get("model") if isinstance(config.get("model"), str) else None)
-    missing_routes = sorted(model for model in required_routes if live_ids and model not in live_ids)
+    missing_routes = sorted(model for model in required_routes if discovery_succeeded and model not in live_ids)
     if missing_routes:
         findings.append("visible or default catalog models are missing from the live proxy")
     codex_version = None
@@ -1340,7 +1357,10 @@ def cmd_restore_default(args: argparse.Namespace) -> None:
     native_ids = {entry["slug"] for entry in native_models}
     target_model = args.model or config.get("model")
     if target_model not in native_ids:
-        target_model = "gpt-5.6-sol" if "gpt-5.6-sol" in native_ids else native_models[0]["slug"]
+        try:
+            target_model = preferred_native_model(native_models)["slug"]
+        except ValueError as exc:
+            emit({"status": "blocked", "error": str(exc)}, 2)
     current = config_path.read_text(encoding="utf-8")
     current_sha = hashlib.sha256(current.encode()).hexdigest()
     updated = replace_top_scalar(current, "model_provider", target_provider)
@@ -1378,6 +1398,7 @@ def cmd_restore_default(args: argparse.Namespace) -> None:
 
 
 def cmd_sync(args: argparse.Namespace) -> None:
+    state_dir = Path(args.state_dir).expanduser()
     config, config_error = load_config(Path(args.config).expanduser())
     if config_error:
         emit({"status": "blocked", "error": f"Codex config is invalid: {config_error}"}, 2)
@@ -1391,12 +1412,12 @@ def cmd_sync(args: argparse.Namespace) -> None:
     enabled_path = (
         Path(args.enabled_manifests).expanduser()
         if args.enabled_manifests
-        else Path(args.state_dir).expanduser() / "enabled-manifests.json"
+        else state_dir / "enabled-manifests.json"
     )
     enabled_ids: list[str] | None = None
     if selected is None and enabled_path.exists():
         try:
-            enabled_ids = enabled_manifest_ids(enabled_path, set(manifest_index()))
+            enabled_ids = enabled_manifest_ids(enabled_path, set(manifest_index(state_dir)))
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             emit(
                 {
@@ -1406,7 +1427,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
                 },
                 2,
             )
-    paths = manifest_paths(selected, enabled_ids)
+    paths = manifest_paths(selected, enabled_ids, state_dir)
     manifests: list[dict] = []
     manifest_errors: dict[str, list[str]] = {}
     for path in paths:
@@ -1436,7 +1457,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
         emit({"status": "blocked", "missing_live_routes": unavailable, "secrets_redacted": True}, 2)
     native_path = Path(args.native_catalog).expanduser()
     target_path = Path(args.catalog).expanduser()
-    policy_path = Path(args.catalog_policy).expanduser()
+    policy_path = Path(args.catalog_policy).expanduser() if args.catalog_policy else default_catalog_policy(state_dir)
     try:
         policy = catalog_policy(policy_path)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
@@ -1450,13 +1471,17 @@ def cmd_sync(args: argparse.Namespace) -> None:
         emit({"status": "blocked", "error": f"model catalog is invalid: {exc}"}, 2)
     native_map = {entry["slug"]: entry for entry in native}
     current_map = {entry["slug"]: entry for entry in current}
-    state_path = Path(args.state_dir).expanduser() / "state.json"
+    state_path = state_dir / "state.json"
     state = read_json(state_path, {"schema_version": 1, "managed_model_ids": []})
     managed_before = set(state.get("managed_model_ids", [])) if isinstance(state, dict) else set()
     desired: dict[str, dict] = {}
+    template_fallbacks: dict[str, dict[str, str]] = {}
     superseded: set[str] = set()
     for manifest in manifests:
-        desired[manifest["slug"]] = build_entry(manifest, native_map)
+        try:
+            desired[manifest["slug"]] = build_entry(manifest, native_map, template_fallbacks)
+        except ValueError as exc:
+            emit({"status": "blocked", "error": str(exc)}, 2)
         superseded.update(manifest.get("supersedes", []))
     protected_conflicts = protected_supersede_conflicts(manifests, policy)
     if protected_conflicts:
@@ -1531,6 +1556,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
         "field_changes": field_changes,
         "order_changed": [entry["slug"] for entry in current] != [entry["slug"] for entry in final_models],
         "sync_scope": "subset" if selected is not None else "full",
+        "template_fallbacks": template_fallbacks,
         "enabled_manifests": sorted(enabled_ids) if enabled_ids is not None else None,
         "superseded_routes": sorted(superseded),
         "catalog_policy": str(policy_path),
@@ -1705,7 +1731,7 @@ def cmd_probe(args: argparse.Namespace) -> None:
                     if args.shell
                     else True
                 )
-                ok = proc.returncode == 0 and expected in answer and execution_ok
+                ok = proc.returncode == 0 and expected == answer and execution_ok
                 results[model] = {
                     "ok": ok,
                     "fast": bool(args.fast),
@@ -1824,7 +1850,7 @@ def parser() -> argparse.ArgumentParser:
     sync.add_argument("--config", default=str(DEFAULT_CODEX_HOME / "config.toml"))
     sync.add_argument("--catalog", default=str(DEFAULT_CODEX_HOME / "model-catalog-cli-proxy.json"))
     sync.add_argument("--native-catalog", default=str(DEFAULT_CODEX_HOME / "models_cache.json"))
-    sync.add_argument("--catalog-policy", default=str(default_catalog_policy()))
+    sync.add_argument("--catalog-policy", help="Explicit policy; otherwise resolve from --state-dir")
     sync.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
     sync.add_argument("--models")
     sync.add_argument("--models-file")
