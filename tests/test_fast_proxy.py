@@ -56,6 +56,7 @@ class FastProxyTests(unittest.TestCase):
                 env = {**os.environ, "CODEX_BRIDGE_LISTEN_PORT": str(port),
                        "CODEX_BRIDGE_UPSTREAM_PORT": str(upstream.server_port),
                        "CODEX_BRIDGE_HELPER": str(helper), "CODEX_BRIDGE_HELPER_CMD": sys.executable,
+                       "CODEX_BRIDGE_CODEX_BIN": str(Path(raw) / "unavailable-codex"),
                        "CODEX_BRIDGE_HELPER_ARGS": "[]"}
                 process = subprocess.Popen(
                     [shutil.which("node"), str(Path(__file__).resolve().parents[1] / "scripts/transparent_proxy.mjs")],

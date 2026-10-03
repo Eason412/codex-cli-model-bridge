@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { extname } from "node:path";
 import http from "node:http";
 import net from "node:net";
@@ -48,12 +49,57 @@ function readClientKey() {
   return value;
 }
 
+// ChatGPT's Codex backend only serves new models to clients whose `Version`
+// header is new enough; lift older (or missing) versions to this floor.
+// The floor follows the Homebrew codex CLI, which is kept current by
+// auto-upgrade.sh, so new models work before the desktop app catches up.
+function installedCodexVersion() {
+  try {
+    const defaultCodex = "/opt/homebrew/bin/codex";
+    const codex = process.env.CODEX_BRIDGE_CODEX_BIN ??
+      (existsSync(defaultCodex) ? defaultCodex : "codex");
+    const output = execFileSync(codex, ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    });
+    return output.match(/\d+\.\d+\.\d+/)?.[0] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+const configuredFloor = process.env.CODEX_BRIDGE_MIN_CLIENT_VERSION ?? "0.160.0";
+const codexVersion = installedCodexVersion();
+const minClientVersion =
+  codexVersion && isOlderVersion(configuredFloor, codexVersion) ? codexVersion : configuredFloor;
+
+function versionTuple(value) {
+  return String(value ?? "")
+    .split(/[.-]/)
+    .slice(0, 3)
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function isOlderVersion(value, floor) {
+  const a = versionTuple(value);
+  const b = versionTuple(floor);
+  for (let i = 0; i < 3; i += 1) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
+  }
+  return false;
+}
+
 function upstreamHeaders(headers) {
-  return {
+  const result = {
     ...headers,
     host: `${upstreamHost}:${upstreamPort}`,
     authorization: `Bearer ${readClientKey()}`,
   };
+  if (minClientVersion && isOlderVersion(result.version, minClientVersion)) {
+    result.version = minClientVersion;
+  }
+  return result;
 }
 
 function sendProxyError(response, error) {
@@ -130,7 +176,9 @@ server.on("clientError", (_error, socket) => {
 });
 
 server.listen(listenPort, listenHost, () => {
-  process.stdout.write(`Codex transparent proxy listening on ${listenHost}:${listenPort}\n`);
+  process.stdout.write(
+    `Codex transparent proxy listening on ${listenHost}:${listenPort} (min client version ${minClientVersion})\n`,
+  );
 });
 
 function shutdown() {
