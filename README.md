@@ -2,7 +2,7 @@
 
 让 Codex 通过本机 CLIProxyAPI（CPA）使用 Coding Plan／订阅模型的 Skill 与命令行工具：检查 Codex 配置和 Provider，同步模型目录，部署本地透明代理，并实际调用模型做验证。
 
-当前开发版本：V0.0.4（未发布） · [更新日志](changelogs/V0.0.4.md)；已发布版本：[V0.0.3](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.3)。
+当前版本：[V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4) · [更新日志](changelogs/V0.0.4.md)
 
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
