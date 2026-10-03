@@ -1,6 +1,5 @@
 """Fast catalog metadata and one-shot Codex probe settings."""
 import contextlib
-import copy
 import importlib.util
 import io
 import json
@@ -15,10 +14,12 @@ spec = importlib.util.spec_from_file_location("bridge_fast_test", ROOT / "script
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 
+from test_bridge import sample_manifest
+
 
 class FastTests(unittest.TestCase):
     def manifest(self):
-        return json.loads((ROOT / "models" / "gpt-6-astra.json").read_text(encoding="utf-8"))
+        return sample_manifest()
 
     def native_models(self):
         return {
@@ -28,41 +29,21 @@ class FastTests(unittest.TestCase):
                             "service_tiers": [{"id": "priority", "name": "Fast", "description": "Astra metadata"}]},
         }
 
-    def test_preserves_speed_tiers_from_exact_native_model(self):
-        native = self.native_models()
-        original = copy.deepcopy(native)
-        entry = bridge.build_entry(self.manifest(), native)
-        self.assertEqual(entry["additional_speed_tiers"], ["fast"])
-        self.assertEqual(entry["service_tiers"], native["gpt-6-astra"]["service_tiers"])
-        entry["service_tiers"][0]["name"] = "changed"
-        self.assertEqual(native, original)
-
-    def test_requested_gpt_family_members_keep_their_native_fast_support(self):
-        native = self.native_models()
-        for model in ("gpt-5.6-luna", "gpt-5.6-terra"):
-            native[model] = {"slug": model, "additional_speed_tiers": ["fast"],
-                             "service_tiers": [{"id": "priority", "name": "Fast", "description": model}]}
-        for model in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"):
-            with self.subTest(model=model):
-                entry = bridge.build_entry({**self.manifest(), "slug": model}, native)
-                self.assertEqual(entry["slug"], model)
-                self.assertEqual(entry["additional_speed_tiers"], ["fast"])
-                self.assertEqual(entry["service_tiers"], native[model]["service_tiers"])
-
     def test_template_fast_does_not_leak_to_missing_or_third_party_models(self):
         native = self.native_models()
         native.pop("gpt-6-astra")
-        for slug in ["gpt-6-astra", "kimi-k3"]:
+        for slug in ["gpt-5.6-sol-copy", "kimi-k3"]:
             manifest = {**self.manifest(), "slug": slug}
             entry = bridge.build_entry(manifest, native)
             self.assertEqual(entry["additional_speed_tiers"], [])
             self.assertEqual(entry["service_tiers"], [])
 
-    def test_explicit_speed_override_is_respected(self):
-        manifest = {**self.manifest(), "additional_speed_tiers": [], "service_tiers": []}
+    def test_declared_speed_tiers_are_kept(self):
+        tiers = [{"id": "priority", "name": "Fast", "description": "verified route"}]
+        manifest = {**self.manifest(), "slug": "kimi-k3", "additional_speed_tiers": ["fast"], "service_tiers": tiers}
         entry = bridge.build_entry(manifest, self.native_models())
-        self.assertEqual(entry["additional_speed_tiers"], [])
-        self.assertEqual(entry["service_tiers"], [])
+        self.assertEqual(entry["additional_speed_tiers"], ["fast"])
+        self.assertEqual(entry["service_tiers"], tiers)
 
     def test_fast_probe_enables_feature_without_changing_config(self):
         with tempfile.TemporaryDirectory() as raw:

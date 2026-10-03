@@ -72,6 +72,23 @@ def native_template() -> dict:
     }
 
 
+def sample_manifest() -> dict:
+    return {
+        "schema_version": 1,
+        "slug": "gpt-6-astra",
+        "display_name": "GPT-6 Astra",
+        "description": "fixture",
+        "template_slug": "gpt-5.6-sol",
+        "context_window": 1000000,
+        "effective_context_window_percent": 95,
+        "default_reasoning_level": "medium",
+        "reasoning_efforts": ["low", "medium", "high"],
+        "input_modalities": ["text", "image"],
+        "supports_search_tool": False,
+        "priority": 0,
+    }
+
+
 class BridgeTests(unittest.TestCase):
     def test_multi_agent_probe_requires_delivered_task_result(self) -> None:
         module = load_bridge()
@@ -123,41 +140,14 @@ class BridgeTests(unittest.TestCase):
                     self.assertFalse(result["runtime_verified"])
                     self.assertTrue(Path(result["backup"]).exists())
 
-    def test_local_catalog_policy_default_and_explicit_override(self) -> None:
+    def test_extra_manifest_template_is_optional_and_supersedes_is_rejected(self) -> None:
         module = load_bridge()
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = root / "catalog-policy.json"
-            with patch.object(module, "DEFAULT_STATE_DIR", root):
-                self.assertEqual(module.default_catalog_policy(), module.DEFAULT_CATALOG_POLICY)
-                local.write_text(json.dumps({"schema_version": 1, "hidden_native_model_ids": ["gpt-5.4"]}), encoding="utf-8")
-                self.assertIsNone(module.parser().parse_args(["sync"]).catalog_policy)
-                explicit = root / "alternate.json"
-                parsed = module.parser().parse_args(["sync", "--catalog-policy", str(explicit)])
-                self.assertEqual(parsed.catalog_policy, str(explicit))
-                self.assertEqual(module.catalog_policy(local)["hidden_native_model_ids"], ["gpt-5.4"])
-
-    def test_bundled_manifests_validate(self) -> None:
-        for manifest in sorted((SCRIPT.parents[1] / "models").glob("*.json")):
-            proc = run_bridge("validate-manifest", str(manifest))
-            self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
-            self.assertEqual(json.loads(proc.stdout)["status"], "valid")
-
-    def test_catalog_policy_blocks_superseding_thread_creation_models(self) -> None:
-        module = load_bridge()
-        policy = {
-            "protected_native_model_ids": ["gpt-5.6-sol"],
-        }
-        manifests = [
-            {
-                "slug": "gpt-5.6-sol-standard",
-                "supersedes": ["gpt-5.6-sol"],
-            }
-        ]
-
-        self.assertEqual(
-            module.protected_supersede_conflicts(manifests, policy),
-            ["gpt-5.6-sol"],
+        manifest = sample_manifest()
+        manifest.pop("template_slug")
+        self.assertEqual(module.validate_manifest(manifest), [])
+        self.assertIn(
+            "supersedes is no longer supported; retired IDs disappear with the live list",
+            module.validate_manifest({**manifest, "supersedes": ["old-id"]}),
         )
 
     def test_required_live_routes_include_visible_and_default_models(self) -> None:
@@ -170,7 +160,6 @@ class BridgeTests(unittest.TestCase):
                 {"slug": "gpt-5.6-sol-wm", "visibility": "list", "supported_in_api": False},
                 {"slug": "grok-4.6", "visibility": "list", "supported_in_api": True},
             ],
-            ["grok-4.6"],
             "gpt-5.6-sol",
         )
 
@@ -599,96 +588,6 @@ class BridgeTests(unittest.TestCase):
             text = proxy_config.read_text(encoding="utf-8")
             self.assertIn("  optimize-multi-agent-v2: true\n", text)
             self.assertIn("fixture-secret", text)
-            again = run_bridge(*base, "--apply")
-            self.assertEqual(again.returncode, 0, again.stderr or again.stdout)
-            self.assertEqual(json.loads(again.stdout)["status"], "unchanged")
-
-    def test_sync_requires_adoption_then_is_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            config = root / "config.toml"
-            native = root / "models_cache.json"
-            target = root / "catalog.json"
-            state = root / "state"
-            config.write_text(
-                '[model_providers.cli_proxy]\nbase_url = "http://127.0.0.1:8317/v1"\nwire_api = "responses"\n',
-                encoding="utf-8",
-            )
-            native.write_text(json.dumps({"models": [native_template()]}), encoding="utf-8")
-            manual_grok = native_template()
-            manual_grok.update({"slug": "grok-4.6", "display_name": "manual"})
-            target.write_text(json.dumps({"models": [native_template(), manual_grok]}), encoding="utf-8")
-            # 本测试只验证这三个条目的接管与幂等性，不随新增模型或本机条目扩大范围。
-            base = (
-                "sync",
-                "--models",
-                "grok-4.6,deepseek-v4-pro,deepseek-v4-flash",
-                "--config",
-                str(config),
-                "--catalog",
-                str(target),
-                "--native-catalog",
-                str(native),
-                "--state-dir",
-                str(state),
-                "--skip-live-check",
-            )
-            blocked = run_bridge(*base)
-            self.assertEqual(blocked.returncode, 2)
-            self.assertEqual(json.loads(blocked.stdout)["conflicts"], ["grok-4.6"])
-            applied = run_bridge(*base, "--adopt", "--apply")
-            self.assertEqual(applied.returncode, 0, applied.stderr or applied.stdout)
-            payload = json.loads(applied.stdout)
-            self.assertEqual(payload["status"], "applied")
-            slugs = {item["slug"] for item in json.loads(target.read_text())["models"]}
-            self.assertEqual(
-                slugs,
-                {"gpt-5.6-sol", "grok-4.6", "deepseek-v4-pro", "deepseek-v4-flash"},
-            )
-            again = run_bridge(*base, "--apply")
-            self.assertEqual(again.returncode, 0, again.stderr or again.stdout)
-            self.assertEqual(json.loads(again.stdout)["status"], "unchanged")
-
-    def test_sync_hides_native_models_by_policy_and_is_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            config = root / "config.toml"
-            native = root / "models_cache.json"
-            target = root / "catalog.json"
-            policy = root / "catalog-policy.json"
-            state = root / "state"
-            config.write_text(
-                '[model_providers.cli_proxy]\nbase_url = "http://127.0.0.1:8317/v1"\nwire_api = "responses"\n',
-                encoding="utf-8",
-            )
-            old_model = {**native_template(), "slug": "gpt-5.4", "display_name": "GPT-5.4"}
-            native.write_text(json.dumps({"models": [native_template(), old_model]}), encoding="utf-8")
-            target.write_text(json.dumps({"models": [native_template(), old_model]}), encoding="utf-8")
-            policy.write_text(
-                json.dumps({"schema_version": 1, "hidden_native_model_ids": ["gpt-5.4"]}),
-                encoding="utf-8",
-            )
-            base = (
-                "sync",
-                "--config",
-                str(config),
-                "--catalog",
-                str(target),
-                "--native-catalog",
-                str(native),
-                "--catalog-policy",
-                str(policy),
-                "--state-dir",
-                str(state),
-                "--skip-live-check",
-            )
-            applied = run_bridge(*base, "--apply")
-            self.assertEqual(applied.returncode, 0, applied.stderr or applied.stdout)
-            payload = json.loads(applied.stdout)
-            self.assertEqual(payload["hidden_native_models"], ["gpt-5.4"])
-            entries = {item["slug"]: item for item in json.loads(target.read_text())["models"]}
-            self.assertEqual(entries["gpt-5.4"]["visibility"], "hide")
-            self.assertIn("gpt-5.4", entries)
             again = run_bridge(*base, "--apply")
             self.assertEqual(again.returncode, 0, again.stderr or again.stdout)
             self.assertEqual(json.loads(again.stdout)["status"], "unchanged")

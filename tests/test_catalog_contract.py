@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from test_bridge import SCRIPT, native_template
+from test_bridge import SCRIPT, native_template, sample_manifest
 
 spec = importlib.util.spec_from_file_location("catalog_contract_bridge", SCRIPT)
 bridge = importlib.util.module_from_spec(spec)
@@ -32,52 +32,54 @@ class CatalogContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             catalog = root / "catalog.json"
-            catalog.write_text(json.dumps({"models": [
-                {"slug": "default-model", "visibility": "hide"},
-                {"slug": "visible-model", "visibility": "list"},
-                {"slug": "managed-model", "visibility": "hide"}]}))
+            entries = [{"slug": "default-model", "visibility": "hide"},
+                       {"slug": "visible-model", "visibility": "list"}]
+            catalog.write_text(json.dumps({"models": entries}))
+            upstream = root / "upstream.json"
+            upstream.write_text(json.dumps({"models": entries}))
             config = root / "config.toml"
             config.write_text('model = "default-model"\nmodel_provider = "openai"\n'
                               'openai_base_url = "http://127.0.0.1:1/v1"\n'
                               'model_catalog_json = ' + json.dumps(str(catalog)) + '\n')
             config.chmod(0o600)
-            (root / "state.json").write_text('{"managed_model_ids": ["managed-model"]}')
             proxy_config = root / "fixture-proxy.yaml"
             proxy_config.write_text('codex:\n  optimize-multi-agent-v2: true\n')
             models_file = root / "models.json"
             args = bridge.parser().parse_args(["audit", "--config", str(config), "--state-dir", str(root),
                 "--profile-config", str(root / "absent-profile"), "--proxy-config", str(proxy_config),
-                "--models-file", str(models_file)])
-            all_ids = {"default-model", "visible-model", "managed-model"}
-            for live, missing in [(set(), all_ids), (all_ids - {"default-model"}, {"default-model"}),
-                                  ({"default-model"}, {"visible-model", "managed-model"}), (all_ids, set())]:
-                with self.subTest(live=live), contextlib.ExitStack() as mocks:
-                    models_file.write_text(json.dumps({"data": [{"id": slug} for slug in live]}))
-                    mocks.enter_context(patch.object(bridge, "thread_inventory", return_value=(
-                        {"openai": 1}, {"integrity": "ok", "total": 1}, None)))
-                    mocks.enter_context(patch.object(bridge, "chatgpt_auth_state", return_value=(
-                        {"mode": "chatgpt", "chatgpt_tokens_present": True}, None)))
-                    mocks.enter_context(patch.object(bridge, "proxy_version", return_value=("7.3.18", (7, 3, 18))))
-                    mocks.enter_context(patch.object(bridge.subprocess, "run", return_value=subprocess.CompletedProcess(
-                        [], 0, "codex-cli 0.160.0", "")))
-                    code, result = invoke(args)
-                    self.assertEqual(result["catalog"]["missing_live_routes"], sorted(missing))
-                    self.assertEqual(result["provider"]["live_model_count"], len(live))
-                    self.assertEqual(result["status"], "attention" if missing else "ready")
-                    self.assertEqual(code, 2 if missing else 0)
-                    if not missing:
-                        for version in [("7.0.0", (7, 0, 0)), (None, None)]:
-                            with patch.object(bridge, "proxy_version", return_value=version):
-                                code, receipt = invoke(args)
-                            self.assertEqual(code, 0)
-                            self.assertEqual(receipt["provider"]["version"], version[0])
-                            self.assertNotIn("minimum_tool_safe_version", receipt["provider"])
-                    with patch.object(bridge, "live_model_ids", side_effect=OSError("fixture failure")):
-                        code, failure = invoke(args)
-                        self.assertEqual(code, 2)
-                        self.assertEqual(failure["status"], "attention")
-                        self.assertEqual(failure["provider"]["live_error"], "OSError")
-                        self.assertEqual(failure["catalog"]["missing_live_routes"], [])
+                "--models-file", str(models_file), "--upstream-file", str(upstream)])
+            all_ids = {"default-model", "visible-model"}
+            with contextlib.ExitStack() as mocks:
+                mocks.enter_context(patch.object(bridge, "thread_inventory", return_value=(
+                    {"openai": 1}, {"integrity": "ok", "total": 1}, None)))
+                mocks.enter_context(patch.object(bridge, "chatgpt_auth_state", return_value=(
+                    {"mode": "chatgpt", "chatgpt_tokens_present": True}, None)))
+                mocks.enter_context(patch.object(bridge, "proxy_version", return_value=("7.3.18", (7, 3, 18))))
+                mocks.enter_context(patch.object(bridge.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, "codex-cli 0.160.0", "")))
+                for live, missing in [(set(), all_ids), (all_ids - {"default-model"}, {"default-model"}),
+                                      ({"default-model"}, {"visible-model"}), (all_ids, set())]:
+                    with self.subTest(live=live):
+                        models_file.write_text(json.dumps({"data": [{"id": slug} for slug in live]}))
+                        code, result = invoke(args)
+                        self.assertEqual(result["catalog"]["missing_live_routes"], sorted(missing))
+                        self.assertEqual(result["provider"]["live_model_count"], len(live))
+                        self.assertTrue(result["catalog"]["in_sync_with_live_list"])
+                        self.assertEqual(result["status"], "attention" if missing else "ready")
+                        self.assertEqual(code, 2 if missing else 0)
+                # A catalog that lags the live list is the failure this audit exists to catch.
+                upstream.write_text(json.dumps({"models": [*entries, {"slug": "new-model", "visibility": "list"}]}))
+                code, stale = invoke(args)
+                self.assertEqual(code, 2)
+                self.assertFalse(stale["catalog"]["in_sync_with_live_list"])
+                self.assertIn("model catalog differs from the live list; run sync", stale["findings"])
+                with patch.object(bridge, "live_model_ids", side_effect=OSError("fixture failure")):
+                    code, failure = invoke(args)
+                self.assertEqual(code, 2)
+                self.assertEqual(failure["status"], "attention")
+                self.assertEqual(failure["provider"]["live_error"], "OSError")
+                self.assertEqual(failure["catalog"]["missing_live_routes"], [])
+                self.assertIsNone(failure["catalog"]["in_sync_with_live_list"])
 
     def test_probe_requires_exact_marker_allowing_outer_whitespace(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -106,7 +108,7 @@ class CatalogContractTests(unittest.TestCase):
                     bridge.parser().parse_args(["configure-multi-agent", option])
                 self.assertEqual(caught.exception.code, 2)
 
-    def test_cli_state_dir_isolates_manifests_enabled_policy_and_ownership(self):
+    def test_cli_state_dir_isolates_overrides_and_extra_manifests(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             home = root / "home"
@@ -114,54 +116,39 @@ class CatalogContractTests(unittest.TestCase):
             (default_state / "models.d").mkdir(parents=True)
             # These would break the command if the default directory leaked in.
             (default_state / "models.d/interference.json").write_text("{}")
-            (default_state / "catalog-policy.json").write_text("not json")
-            (default_state / "state.json").write_text('{"managed_model_ids": ["interference"]}')
+            (default_state / "overrides.json").write_text("not json")
             state = root / "selected-state"
             (state / "models.d").mkdir(parents=True)
-            manifest = json.loads((SCRIPT.parents[1] / "models/gpt-6-astra.json").read_text())
-            manifest["slug"] = "local-target"
+            manifest = {**sample_manifest(), "slug": "local-target"}
             (state / "models.d/local-target.json").write_text(json.dumps(manifest))
-            (state / "enabled-manifests.json").write_text('{"schema_version": 1, "enabled": ["local-target"]}')
-            policy = state / "catalog-policy.json"
-            policy.write_text('{"schema_version": 1, "hidden_native_model_ids": ["gpt-5.6-sol"]}')
-            native = root / "native.json"
-            native.write_text(json.dumps({"models": [native_template()]}))
+            (state / "overrides.json").write_text(json.dumps(
+                {"schema_version": 1, "models": {"gpt-5.6-sol": {"visibility": "hide"}}}))
+            upstream = root / "upstream.json"
+            upstream.write_text(json.dumps({"models": [native_template()]}))
+            models_file = root / "models.json"
+            models_file.write_text(json.dumps({"data": [{"id": "local-target"}]}))
             config = root / "config.toml"
-            config.write_text('model_provider = "openai"\n')
+            config.write_text('model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:1/v1"\n')
             target = root / "catalog.json"
             env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(root / "codex"),
                    "CLIPROXYAPI_CONFIG": str(root / "absent-proxy"), "PYTHONDONTWRITEBYTECODE": "1"}
-            base = ["sync", "--config", str(config), "--native-catalog", str(native),
-                    "--catalog", str(target), "--state-dir", str(state), "--skip-live-check", "--apply"]
             before_default = {p: p.read_bytes() for p in default_state.rglob("*") if p.is_file()}
-            def run(*extra):
-                process = subprocess.run([os.sys.executable, str(SCRIPT), *base, *extra],
-                                         env=env, text=True, capture_output=True, check=False)
-                return process.returncode, json.loads(process.stdout)
-            code, result = run()
-            self.assertEqual(code, 0, result)
-            self.assertEqual(result["enabled_manifests"], ["local-target"])
-            self.assertEqual(result["catalog_policy"], str(policy))
-            self.assertEqual(result["managed_after"], ["local-target"])
+            process = subprocess.run(
+                [os.sys.executable, str(SCRIPT), "sync", "--config", str(config), "--catalog", str(target),
+                 "--state-dir", str(state), "--upstream-file", str(upstream), "--models-file", str(models_file),
+                 "--codex", str(root / "absent-codex"), "--apply"],
+                env=env, text=True, capture_output=True, check=False)
+            result = json.loads(process.stdout)
+            self.assertEqual(process.returncode, 0, result)
+            self.assertEqual(result["extra_models"], ["local-target"])
+            self.assertEqual(result["overrides"], str(state / "overrides.json"))
             entries = {entry["slug"]: entry for entry in json.loads(target.read_text())["models"]}
             self.assertEqual(set(entries), {"gpt-5.6-sol", "local-target"})
             self.assertEqual(entries["gpt-5.6-sol"]["visibility"], "hide")
-            self.assertEqual(json.loads((state / "state.json").read_text())["managed_model_ids"], ["local-target"])
-            explicit = root / "explicit-policy.json"
-            explicit.write_text('{"schema_version": 1, "hidden_native_model_ids": []}')
-            code, result = run("--catalog-policy", str(explicit))
-            self.assertEqual(code, 0, result)
-            self.assertEqual(result["catalog_policy"], str(explicit))
-            self.assertEqual(json.loads(target.read_text())["models"][0]["visibility"], "list")
-            before_target = target.read_bytes()
-            code, result = run("--catalog-policy", str(default_state / "catalog-policy.json"))
-            self.assertEqual(code, 2)
-            self.assertEqual(result["status"], "blocked")
-            self.assertEqual(target.read_bytes(), before_target)
             self.assertEqual({p: p.read_bytes() for p in before_default}, before_default)
 
     def test_missing_template_uses_highest_priority_and_reports_only_fallbacks(self):
-        manifest = json.loads((SCRIPT.parents[1] / "models/gpt-6-astra.json").read_text())
+        manifest = sample_manifest()
         templates = {"native-b": {**native_template(), "slug": "native-b", "priority": 2},
                      "native-z": {**native_template(), "slug": "native-z", "priority": 0,
                                   "model_messages": {"instructions_template": "Z"}},
@@ -183,7 +170,7 @@ class CatalogContractTests(unittest.TestCase):
             bridge.build_entry(manifest, {})
 
     def test_native_fallback_prefers_visible_entries_before_priority(self):
-        manifest = json.loads((SCRIPT.parents[1] / "models/gpt-6-astra.json").read_text())
+        manifest = sample_manifest()
         entries = [{**native_template(), "slug": "hidden", "visibility": "hide", "priority": -100},
                    {**native_template(), "slug": "visible", "visibility": "list", "priority": 10}]
         fallbacks = {}
