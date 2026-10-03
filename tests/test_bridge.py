@@ -2,7 +2,9 @@ import argparse
 import contextlib
 import io
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -15,20 +17,26 @@ from unittest.mock import patch
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "bridge.py"
 
 
-def run_bridge(*args: str) -> subprocess.CompletedProcess:
+def load_bridge(name: str = "bridge"):
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_bridge(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **(env or {})},
     )
 
 
 def run_probe_fixture(root: Path, *args: str) -> subprocess.CompletedProcess:
     """Use an isolated active root rather than pretending --config loads it."""
-    spec = __import__("importlib.util").util.spec_from_file_location("probe_fixture", SCRIPT)
-    module = __import__("importlib.util").util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_bridge("probe_fixture")
     output = io.StringIO()
     with patch.object(module, "DEFAULT_CODEX_HOME", root), contextlib.redirect_stdout(output):
         parsed = module.parser().parse_args(list(args))
@@ -65,9 +73,7 @@ def native_template() -> dict:
 
 class BridgeTests(unittest.TestCase):
     def test_multi_agent_probe_requires_delivered_task_result(self) -> None:
-        spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = load_bridge()
         for scenario in ["valid", "empty", "wrong", "incomplete", "invalid_json", "input_echo", "error"]:
             with self.subTest(scenario=scenario):
                 def fake_open(request, timeout):
@@ -93,9 +99,7 @@ class BridgeTests(unittest.TestCase):
                 self.assertNotIn("Please provide a task", output.getvalue())
 
     def test_multi_agent_configuration_requires_approval_and_never_restarts(self) -> None:
-        spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = load_bridge()
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "config.yaml"
             before = "codex:\n  optimize-multi-agent-v2: false\n"
@@ -119,9 +123,7 @@ class BridgeTests(unittest.TestCase):
                     self.assertTrue(Path(result["backup"]).exists())
 
     def test_local_catalog_policy_default_and_explicit_override(self) -> None:
-        spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = load_bridge()
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             local = root / "catalog-policy.json"
@@ -141,9 +143,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(json.loads(proc.stdout)["status"], "valid")
 
     def test_catalog_policy_blocks_superseding_thread_creation_models(self) -> None:
-        module_spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
+        module = load_bridge()
         policy = {
             "protected_native_model_ids": ["gpt-5.6-sol"],
         }
@@ -160,9 +160,7 @@ class BridgeTests(unittest.TestCase):
         )
 
     def test_required_live_routes_include_visible_and_default_models(self) -> None:
-        module_spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
+        module = load_bridge()
 
         required = module.required_live_routes(
             [
@@ -179,9 +177,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_parse_proxy_version(self) -> None:
 
-        module_spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
+        module = load_bridge()
 
         self.assertEqual(
             module.parse_proxy_version("CLIProxyAPI Version: 7.2.130, Commit: Homebrew"),
@@ -204,9 +200,7 @@ class BridgeTests(unittest.TestCase):
             "tool_mode": None,
         }
 
-        entry = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(entry)
-        entry.loader.exec_module(module)
+        module = load_bridge()
         result = module.build_entry(manifest, {"gpt-5.6-sol": native_template()})
 
         self.assertNotIn("tool_mode", result)
@@ -217,32 +211,32 @@ class BridgeTests(unittest.TestCase):
             catalog = root / "catalog.json"
             fake_codex = root / "codex"
             catalog.write_text(json.dumps({"models": [{"slug": "grok-4.6"}]}), encoding="utf-8")
-            fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, pathlib, sys\n"
-                "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
-                "out.write_text('CODEX_BRIDGE_SHELL_OK', encoding='utf-8')\n"
-                "print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
-                "'command':'/bin/zsh -lc pwd','status':'completed','exit_code':0}}))\n",
-                encoding="utf-8",
-            )
-            fake_codex.chmod(0o700)
-
-            proc = run_bridge(
-                "probe",
-                "--desktop",
-                "--shell",
-                "--models",
-                "grok-4.6",
-                "--catalog",
-                str(catalog),
-                "--codex",
-                str(fake_codex),
-            )
-
-            self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
-            result = json.loads(proc.stdout)["results"]["grok-4.6"]
-            self.assertTrue(result["shell_executed"])
+            for scenario, command_exit in [("valid", 0), ("marker_only", None), ("failed_command", 1)]:
+                with self.subTest(scenario=scenario):
+                    fake_codex.write_text(
+                        f"#!{sys.executable}\n"
+                        "import json, pathlib, sys\n"
+                        "assert '--json' in sys.argv\n"
+                        "assert 'CODEX_BRIDGE_SHELL_OK' in sys.argv[-1]\n"
+                        "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
+                        "out.write_text('CODEX_BRIDGE_SHELL_OK', encoding='utf-8')\n"
+                        f"command_exit = {command_exit!r}\n"
+                        "if command_exit is not None:\n"
+                        " print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
+                        "'command':'/bin/zsh -lc pwd','status':'completed','exit_code':command_exit}}))\n",
+                        encoding="utf-8",
+                    )
+                    fake_codex.chmod(0o700)
+                    proc = run_bridge(
+                        "probe", "--desktop", "--shell", "--models", "grok-4.6",
+                        "--catalog", str(catalog), "--codex", str(fake_codex),
+                        env={"HOME": str(root), "CODEX_HOME": str(root)},
+                    )
+                    valid = scenario == "valid"
+                    self.assertEqual(proc.returncode, 0 if valid else 2, proc.stderr or proc.stdout)
+                    result = json.loads(proc.stdout)["results"]["grok-4.6"]
+                    self.assertEqual(result["shell_executed"], valid)
+                    self.assertEqual(result["ok"], valid)
 
     def test_desktop_probe_uses_active_config_catalog_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -339,9 +333,7 @@ class BridgeTests(unittest.TestCase):
             self.assertIn("no model_catalog_json", json.loads(proc.stdout)["error"])
 
     def test_profile_probe_keeps_cli_proxy_catalog_default(self) -> None:
-        module_spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
+        module = load_bridge()
 
         target = module.probe_catalog_path(
             argparse.Namespace(catalog=None, desktop=False)
@@ -358,48 +350,53 @@ class BridgeTests(unittest.TestCase):
             catalog = root / "catalog.json"
             fake_codex = root / "codex"
             catalog.write_text(json.dumps({"models": [{"slug": "grok-4.6"}]}), encoding="utf-8")
-            fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, pathlib, sys\n"
-                "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
-                "out.write_text('CODEX_BRIDGE_TOOL_SEQUENCE_OK', encoding='utf-8')\n"
-                "for command in ('/bin/zsh -lc pwd', \"/bin/zsh -lc 'git --version'\"):\n"
-                " print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
-                "'command':command,'status':'completed','exit_code':0}}))\n",
-                encoding="utf-8",
-            )
-            fake_codex.chmod(0o700)
-
-            proc = run_bridge(
-                "probe",
-                "--desktop",
-                "--tool-sequence",
-                "--models",
-                "grok-4.6",
-                "--catalog",
-                str(catalog),
-                "--codex",
-                str(fake_codex),
-            )
-
-            self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
-            result = json.loads(proc.stdout)["results"]["grok-4.6"]
-            self.assertTrue(result["tool_sequence_executed"])
-
-    def test_tool_sequence_prompt_wins_when_shell_flag_is_also_present(self) -> None:
-        module_spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
-
-        prompt = module.probe_prompt(shell=True, tool_sequence=True)
-
-        self.assertIn("first run pwd", prompt)
-        self.assertIn("then run git --version", prompt)
-        self.assertIn("CODEX_BRIDGE_TOOL_SEQUENCE_OK", prompt)
+            commands = [('/bin/zsh -lc pwd', 0), ("/bin/zsh -lc 'git --version'", 0)]
+            scenarios = {
+                "valid": (commands, 0),
+                "marker_only": ([], 0),
+                "only_pwd": (commands[:1], 0),
+                "reversed": (list(reversed(commands)), 0),
+                "failed_command": ([commands[0], (commands[1][0], 1)], 0),
+                "process_failure": (commands, 1),
+            }
+            for scenario, (events, process_exit) in scenarios.items():
+                with self.subTest(scenario=scenario):
+                    fake_codex.write_text(
+                        f"#!{sys.executable}\n"
+                        "import json, pathlib, sys\n"
+                        "assert '--json' in sys.argv\n"
+                        "prompt = sys.argv[-1]\n"
+                        "assert 'first run pwd' in prompt and 'then run git --version' in prompt\n"
+                        "assert 'CODEX_BRIDGE_TOOL_SEQUENCE_OK' in prompt\n"
+                        "assert 'CODEX_BRIDGE_SHELL_OK' not in prompt\n"
+                        "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
+                        "out.write_text('CODEX_BRIDGE_TOOL_SEQUENCE_OK', encoding='utf-8')\n"
+                        f"for command, command_exit in {events!r}:\n"
+                        " print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
+                        "'command':command,'status':'completed','exit_code':command_exit}}))\n"
+                        f"sys.exit({process_exit})\n",
+                        encoding="utf-8",
+                    )
+                    fake_codex.chmod(0o700)
+                    proc = run_bridge(
+                        "probe", "--desktop", "--shell", "--tool-sequence",
+                        "--models", "grok-4.6", "--catalog", str(catalog),
+                        "--codex", str(fake_codex),
+                        env={"HOME": str(root), "CODEX_HOME": str(root)},
+                    )
+                    self.assertEqual(proc.returncode, 0 if scenario == "valid" else 2, proc.stderr or proc.stdout)
+                    result = json.loads(proc.stdout)["results"]["grok-4.6"]
+                    self.assertTrue(result["shell"])
+                    self.assertTrue(result["tool_sequence"])
+                    self.assertEqual(result["tool_sequence_executed"], scenario in {"valid", "process_failure"})
+                    self.assertEqual(result["ok"], scenario == "valid")
 
     def test_configure_writes_isolated_profile_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
+            home = root / "home"
+            home.mkdir()
+            env = {"HOME": str(home), "CODEX_HOME": str(root)}
             config = root / "config.toml"
             profile = root / "cli-proxy.config.toml"
             catalog = root / "catalog.json"
@@ -410,6 +407,7 @@ class BridgeTests(unittest.TestCase):
                 '[mcp_servers.keep]\ntype = "http"\nurl = "https://example.test"\n',
                 encoding="utf-8",
             )
+            original_config = config.read_bytes()
             proxy_config.write_text('api-keys: ["fixture"]\n', encoding="utf-8")
             args = (
                 "configure",
@@ -423,16 +421,17 @@ class BridgeTests(unittest.TestCase):
                 str(proxy_config),
                 "--apply",
             )
-            first = run_bridge(*args)
+            first = run_bridge(*args, env=env)
             self.assertEqual(first.returncode, 0, first.stderr or first.stdout)
-            self.assertIn('model = "keep-me"', config.read_text(encoding="utf-8"))
+            self.assertEqual(config.read_bytes(), original_config)
             text = profile.read_text(encoding="utf-8")
             self.assertIn("[model_providers.cli_proxy]", text)
-            self.assertNotIn("cli_proxy", config.read_text(encoding="utf-8"))
             self.assertEqual(profile.stat().st_mode & 0o777, 0o600)
             self.assertEqual(helper.stat().st_mode & 0o777, 0o700)
-            second = run_bridge(*args)
+            second = run_bridge(*args, env=env)
+            self.assertEqual(second.returncode, 0, second.stderr or second.stdout)
             self.assertEqual(json.loads(second.stdout)["status"], "unchanged")
+            self.assertEqual(config.read_bytes(), original_config)
 
     def test_restore_default_follows_dominant_history_without_mutating_threads(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -452,6 +451,9 @@ class BridgeTests(unittest.TestCase):
                 [("openai-1", "openai"), ("openai-2", "openai"), ("proxy-1", "cli_proxy")],
             )
             connection.commit()
+            threads_before = connection.execute(
+                "SELECT id, model_provider, archived FROM threads ORDER BY id"
+            ).fetchall()
             connection.close()
             sha = hashlib.sha256(config.read_bytes()).hexdigest()
             proc = run_bridge(
@@ -475,7 +477,10 @@ class BridgeTests(unittest.TestCase):
             self.assertNotIn("model_catalog_json", text)
             self.assertNotIn("openai_base_url", text)
             connection = sqlite3.connect(state_db)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0], 3)
+            self.assertEqual(
+                connection.execute("SELECT id, model_provider, archived FROM threads ORDER BY id").fetchall(),
+                threads_before,
+            )
             connection.close()
 
     def test_configure_desktop_preview_preserves_openai_history_identity(self) -> None:
@@ -523,6 +528,9 @@ class BridgeTests(unittest.TestCase):
                 [("openai-1", "openai"), ("openai-2", "openai"), ("proxy-1", "cli_proxy")],
             )
             connection.commit()
+            threads_before = connection.execute(
+                "SELECT id, model_provider, archived FROM threads ORDER BY id"
+            ).fetchall()
             connection.close()
             proc = run_bridge(
                 "configure-desktop",
@@ -550,6 +558,11 @@ class BridgeTests(unittest.TestCase):
             self.assertIn('openai_base_url = "http://127.0.0.1:8318/v1"', payload["diff"])
             self.assertFalse(runtime.exists())
             self.assertFalse(launch_agent.exists())
+            with sqlite3.connect(state_db) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT id, model_provider, archived FROM threads ORDER BY id").fetchall(),
+                    threads_before,
+                )
 
     def test_configure_multi_agent_is_guarded_redacted_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -563,7 +576,6 @@ class BridgeTests(unittest.TestCase):
                 "configure-multi-agent",
                 "--proxy-config",
                 str(proxy_config),
-                "--skip-restart",
             )
             preview = run_bridge(*base)
             self.assertEqual(preview.returncode, 0, preview.stderr or preview.stdout)
@@ -709,9 +721,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(parsed.stdout, "fixture-key-value")
 
     def test_helper_invocation_matches_helper_extension(self) -> None:
-        module_spec = __import__("importlib.util").util.spec_from_file_location("bridge", SCRIPT)
-        module = __import__("importlib.util").util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
+        module = load_bridge()
 
         command, args = module.helper_invocation(Path("read-client-key.py"))
         self.assertEqual(command, sys.executable)

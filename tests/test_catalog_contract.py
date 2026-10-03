@@ -65,6 +65,13 @@ class CatalogContractTests(unittest.TestCase):
                     self.assertEqual(result["provider"]["live_model_count"], len(live))
                     self.assertEqual(result["status"], "attention" if missing else "ready")
                     self.assertEqual(code, 2 if missing else 0)
+                    if not missing:
+                        for version in [("7.0.0", (7, 0, 0)), (None, None)]:
+                            with patch.object(bridge, "proxy_version", return_value=version):
+                                code, receipt = invoke(args)
+                            self.assertEqual(code, 0)
+                            self.assertEqual(receipt["provider"]["version"], version[0])
+                            self.assertNotIn("minimum_tool_safe_version", receipt["provider"])
                     with patch.object(bridge, "live_model_ids", side_effect=OSError("fixture failure")):
                         code, failure = invoke(args)
                         self.assertEqual(code, 2)
@@ -91,6 +98,13 @@ class CatalogContractTests(unittest.TestCase):
                             code, result = invoke(args)
                         self.assertEqual(result["results"]["fixture-model"]["ok"], expected)
                         self.assertEqual(code, 0 if expected else 2)
+
+    def test_removed_noop_options_are_rejected(self):
+        for option in ["--brew", "--skip-restart"]:
+            with self.subTest(option=option), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    bridge.parser().parse_args(["configure-multi-agent", option])
+                self.assertEqual(caught.exception.code, 2)
 
     def test_cli_state_dir_isolates_manifests_enabled_policy_and_ownership(self):
         with tempfile.TemporaryDirectory() as raw:

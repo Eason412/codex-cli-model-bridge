@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Codex ↔ CLIProxyAPI model bridge.
 
 The script deliberately keeps secrets out of stdout. It manages only the Codex
@@ -49,7 +53,6 @@ DEFAULT_LAUNCH_AGENT = Path(
 TRANSPARENT_LAUNCH_LABEL = "com.zhijian.codex-cli-model-bridge-transparent-proxy"
 PROVIDER_ID = "cli_proxy"
 SCHEMA_VERSION = 1
-MIN_TOOL_SAFE_PROXY_VERSION = (7, 2, 130)
 
 
 def is_windows() -> bool:
@@ -92,14 +95,6 @@ def default_proxy_binary() -> Path:
         ]
     found = discover_executable(["cliproxyapi", "cli-proxy-api", "CLIProxyAPI"], extra)
     return found or Path("cliproxyapi")
-
-
-def default_brew() -> Path:
-    found = discover_executable(
-        ["brew"],
-        [Path("/opt/homebrew/bin/brew"), Path("/usr/local/bin/brew")],
-    )
-    return found or Path("brew")
 
 
 def default_node() -> Path:
@@ -154,7 +149,6 @@ def helper_invocation(helper_path: Path) -> tuple[str, list[str]]:
 
 
 DEFAULT_PROXY_CONFIG = default_proxy_config()
-DEFAULT_BREW = default_brew()
 DEFAULT_PROXY_BINARY = default_proxy_binary()
 DEFAULT_HELPER = default_helper_path()
 
@@ -870,19 +864,6 @@ def start_launch_agent(path: Path) -> str | None:
     return None if proc.returncode == 0 else "launchctl failed to start the transparent proxy"
 
 
-def wait_for_models(base_url: str, attempts: int = 30) -> bool:
-    request = urllib.request.Request(f"{base_url.rstrip('/')}/models", headers={"Authorization": "Bearer probe"})
-    for _ in range(attempts):
-        try:
-            with urllib.request.urlopen(request, timeout=2) as response:
-                payload = json.load(response)
-            if response.status == 200 and isinstance(payload.get("data"), list):
-                return True
-        except (OSError, ValueError, urllib.error.URLError):
-            time.sleep(0.2)
-    return False
-
-
 def cmd_configure_multi_agent(args: argparse.Namespace) -> None:
     proxy_config = Path(args.proxy_config).expanduser()
     if not is_loopback(args.transparent_url):
@@ -1219,13 +1200,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         ).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         findings.append("Codex CLI is unavailable")
-    proxy_version_text, proxy_version_tuple = proxy_version(Path(args.proxy_binary).expanduser())
-    if proxy_version_tuple is None:
-        findings.append("CLIProxyAPI version is unavailable")
-    elif "grok-4.6" in managed and proxy_version_tuple < MIN_TOOL_SAFE_PROXY_VERSION:
-        findings.append(
-            "CLIProxyAPI is older than 7.2.130; Grok Responses tool and multi-agent probes are required"
-        )
+    proxy_version_text, _ = proxy_version(Path(args.proxy_binary).expanduser())
     emit(
         {
             "status": "ready" if not findings and not live_error else "attention",
@@ -1264,9 +1239,6 @@ def cmd_audit(args: argparse.Namespace) -> None:
                 "live_error": live_error,
                 "multi_agent_v2_compat": proxy_multi_agent_compat,
                 "version": proxy_version_text,
-                "minimum_tool_safe_version": ".".join(
-                    str(part) for part in MIN_TOOL_SAFE_PROXY_VERSION
-                ),
             },
             "catalog": {
                 "path": str(catalog_path) if catalog_path else None,
@@ -1829,9 +1801,7 @@ def parser() -> argparse.ArgumentParser:
     multi_agent = sub.add_parser("configure-multi-agent")
     multi_agent.add_argument("--proxy-config", default=str(DEFAULT_PROXY_CONFIG))
     multi_agent.add_argument("--transparent-url", default=DEFAULT_TRANSPARENT_PROXY_URL)
-    multi_agent.add_argument("--brew", default=str(DEFAULT_BREW), help="Legacy option; no service is restarted")
     multi_agent.add_argument("--expected-sha256")
-    multi_agent.add_argument("--skip-restart", action="store_true", help="Legacy no-op; this command never restarts services")
     multi_agent.add_argument("--apply", action="store_true")
     multi_agent.set_defaults(func=cmd_configure_multi_agent)
 
