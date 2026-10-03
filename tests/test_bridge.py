@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -709,10 +710,11 @@ class BridgeTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
             text = profile.read_text(encoding="utf-8")
-            self.assertIn(sys.executable, text)
+            command = tomllib.loads(text)["model_providers"]["cli_proxy"]["auth"]["command"]
+            self.assertEqual(command, load_bridge().python_executable())
             self.assertIn(str(helper), text)
             parsed = subprocess.run(
-                [sys.executable, str(helper)],
+                [command, str(helper)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -724,7 +726,7 @@ class BridgeTests(unittest.TestCase):
         module = load_bridge()
 
         command, args = module.helper_invocation(Path("read-client-key.py"))
-        self.assertEqual(command, sys.executable)
+        self.assertEqual(command, module.python_executable())
         self.assertEqual(args, ["read-client-key.py"])
         command, args = module.helper_invocation(Path("read-client-key.rb"))
         self.assertTrue(Path(command).name.startswith("ruby") or command.endswith("ruby"))

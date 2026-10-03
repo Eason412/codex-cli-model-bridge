@@ -60,7 +60,28 @@ def is_windows() -> bool:
 
 
 def python_executable() -> str:
-    return sys.executable or shutil.which("python3") or shutil.which("python") or "python3"
+    """Persist a host interpreter, not the uv environment running this script."""
+    candidate = shutil.which("python3")
+    if candidate:
+        path = Path(candidate).absolute()
+        resolved = path.resolve()
+        virtual_roots = [os.environ.get("VIRTUAL_ENV"), os.environ.get("CONDA_PREFIX")]
+        if sys.prefix != sys.base_prefix:
+            virtual_roots.append(sys.prefix)
+        temporary = False
+        for location in (path, resolved):
+            rendered = location.as_posix().lower()
+            if "/uv/" in rendered and ("environments" in rendered or "archive" in rendered):
+                temporary = True
+            if any((parent / "pyvenv.cfg").exists() for parent in location.parents):
+                temporary = True
+            if any(part.lower() in {".venv", "venv", "virtualenv"} for part in location.parts):
+                temporary = True
+            if any(location.is_relative_to(Path(root).absolute()) for root in virtual_roots if root):
+                temporary = True
+        if not temporary:
+            return str(resolved)
+    return "/usr/bin/python3" if Path("/usr/bin/python3").exists() else "python3"
 
 
 def ruby_executable() -> str:
