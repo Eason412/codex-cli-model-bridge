@@ -46,7 +46,7 @@ All writes preview without `--apply`; use verified live route IDs for `<model-id
 | `probe-multi-agent --models <model-id>` | Synthetic `agent_message` delivery; not native spawn acceptance. |
 | `validate-manifest <path>` | Validate an extra-model manifest for `models.d` without installing a route. |
 
-The isolated helper reads the existing CPA client key without copying it into Codex config. Python helpers use a stable host interpreter, not the uv/virtual environment running the bridge; retain an existing Ruby `.rb` helper. Use `codex --profile cli-proxy` for the installed profile. Sync reads the route Codex itself uses: a Desktop-transparent root goes through `openai_base_url`, where the proxy adds credentials; otherwise `--config` must carry command-backed auth under `[model_providers.cli_proxy]` (for example `<codex-home>/cli-proxy.config.toml`). The target catalog defaults to that config's `model_catalog_json`.
+The isolated helper reads the existing CPA client key without copying it into Codex config. Python helpers use a stable host interpreter, not the uv/virtual environment running the bridge; retain an existing Ruby `.rb` helper. Use `codex --profile cli-proxy` for the installed profile. Sync only uses this bridge's own route: a Desktop-transparent root whose `openai_base_url` is the transparent proxy (`--transparent-url`, default `http://127.0.0.1:8318/v1`; the proxy adds credentials), or a config whose active Provider is `cli_proxy` with command-backed auth (for example `<codex-home>/cli-proxy.config.toml`). Router or other gateways are refused, not synced. The target catalog defaults to that config's `model_catalog_json`, resolved relative to the config file. Sync needs `codex` on PATH (or `--codex`) for the client version and the load check.
 
 ## Preview and apply
 
@@ -89,7 +89,7 @@ Keys are exact IDs or globs. Globs apply in file order, then exact IDs; values r
 
 `<state-dir>/models.d/*.json` only adds routes that `/v1/models` lists but the Codex-format list lacks; see [model-manifests.md](references/model-manifests.md). A manifest whose ID is in the live list is reported under `manifests_shadowed_by_live_list` and ignored.
 
-Sync writes nothing when the live list fails, is empty or malformed, overrides are invalid, an extra route is missing, or the result would drop the config's `model`, `review_model` or `[agents].default_subagent_model`. Unchanged output is not rewritten; a change keeps one `<catalog>.previous` copy. Receipts list added and removed IDs and the changed field names per model. Legacy `catalog-policy.json`, `enabled-manifests.json` and `state.json` are reported under `legacy_files_ignored`. These guards make unattended runs safe, for example after the daily CPA upgrade and service restart.
+Before replacing the catalog, sync loads the candidate with Codex's own parser (`codex debug models`, offline) and writes only if Codex accepts it with the same model IDs. It also writes nothing when the live list fails or is empty, overrides or manifests are invalid (including duplicate IDs), an extra route is missing, the config's `model`, `review_model` or `[agents].default_subagent_model` is absent, or a model used by a `[profiles.*]` entry or an agent role `config_file` would be removed. Unchanged output is not rewritten; a change keeps one `<catalog>.previous` copy of the last accepted catalog. An unreadable existing catalog is rebuilt and reported under `existing_catalog_invalid` without touching `.previous`. Receipts list added and removed IDs and the changed field names per model, with URLs stripped of credentials. Legacy `catalog-policy.json`, `enabled-manifests.json` and `state.json` are reported under `legacy_files_ignored`. These guards make unattended runs safe, for example after the daily CPA upgrade and service restart. A list that is temporarily short (for example while CPA is still loading accounts) is still a valid catalog; the missing models return on the next sync.
 
 ## Verification
 
@@ -113,7 +113,7 @@ Apply checks relevant to the requested mode and change:
 
 - Root Provider stays aligned with history; root/history repairs preserve the integrity-checked inventory digest.
 - Selected isolated profile or Desktop bridge is valid and healthy; Desktop retains ChatGPT login.
-- Audit reports the catalog in sync with the live list; listed and default routes are live.
+- Audit reports no `codex_load_error` and the catalog in sync with the live list; listed and default routes are live.
 - Each affected model passes the Codex probe; requested shell, sequence, spawn and Fast checks have their own evidence.
 - Repeated sync makes no changes. Report versions, endpoints, mode/Provider, catalog changes, fallback receipts, probe results, backups and approved reload/rollback.
 

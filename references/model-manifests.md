@@ -17,9 +17,9 @@ Changes fields of models that are already in the live list:
 }
 ```
 
-- Keys are exact model IDs or globs (`*`, `?`, `[...]`). Globs apply in file order, then the exact ID, so an exact key wins.
+- Keys are exact model IDs or globs (`*`, `?`, `[...]`). Globs apply in file order, then the exact ID, so an exact key wins; a key equal to a real ID (even one containing brackets) always matches it exactly.
 - Each value replaces top-level catalog fields; `null` removes the field. `slug` cannot change.
-- Checked fields: `visibility` is `list` or `hide`; `context_window`, `max_context_window`, `auto_compact_token_limit`, `effective_context_window_percent` (at most 100) and `priority` are positive integers; `default_reasoning_level` must be one of the model's `supported_reasoning_levels`.
+- Checked fields: `visibility` is `list` or `hide`; `context_window`, `max_context_window` and `auto_compact_token_limit` are positive integers; `effective_context_window_percent` is 1-100; `priority` is any integer. When an override touches reasoning, `default_reasoning_level` must be one of the model's `supported_reasoning_levels`. Every other field is checked by Codex itself: sync writes only a catalog that `codex debug models` loads.
 - Keys that match nothing are listed in `overrides_unmatched` so retired IDs can be removed later; they do not block sync.
 
 Prefer Codex settings over catalog edits where they exist: `model_context_window` sets one context size for every model, clamped by each model's `max_context_window`, and `model_reasoning_effort` sets the default effort.
@@ -33,7 +33,7 @@ Adds a route that CPA's `/v1/models` lists but its Codex-format list lacks. One 
 - Optional: `supports_search_tool` (default `false`), `supports_image_detail_original`, `tool_mode` (`null` removes an inherited `code_mode_only`), `additional_speed_tiers` and `service_tiers`. Speed tiers default to empty and are never copied from the template; declare them only after verifying the route's tier semantics, see [fast-mode.md](fast-mode.md).
 - `supersedes` is rejected: retired IDs leave the catalog when they leave the live list.
 
-A manifest whose ID appears in the live list is ignored and reported under `manifests_shadowed_by_live_list`; move any still-wanted difference into `overrides.json` and delete the manifest.
+A manifest whose ID appears in the live list is ignored without validation and reported under `manifests_shadowed_by_live_list`; move any still-wanted difference into `overrides.json` and delete the manifest. Two manifests declaring the same ID block sync.
 
 Resolve context and reasoning controls from the provider's exact catalog or an observed route, not marketing claims. Before adding a manifest:
 

@@ -147,13 +147,13 @@ GPT 的 Fast 档位默认不启用，目录继承、开关和单次探测见 [Fa
 
 ## 自动同步
 
-`sync` 可以无人值守地运行：实时列表拉取失败、为空或格式不对，个人偏好不合法，或者结果会去掉配置正在使用的 `model`、`review_model`、`[agents].default_subagent_model` 时，一律不写入；内容没变不改文件；有变化时保留一份 `<目录>.previous` 用于回退。macOS 上可以把它放进每天升级 CPA 的脚本，在 CPA 和透明代理重启、端口恢复响应之后运行：
+`sync` 可以无人值守地运行。写入前先用本机 Codex 自己的解析器（`codex debug models`，不联网）加载新目录，Codex 读不了就不写。实时列表拉取失败或为空、个人偏好或补充清单不合法、配置正在使用的模型（含 profile 和子代理角色文件里的模型）会被去掉时，同样不写入。内容没变不改文件；有变化时保留一份 `<目录>.previous` 用于回退。它只同步本工具自己的路由，`openai_base_url` 指向 Router 等其他网关时会拒绝。macOS 上可以把它放进每天升级 CPA 的脚本，在 CPA 和透明代理重启、端口恢复响应之后运行：
 
 ```sh
 uv run <skill-dir>/scripts/bridge.py sync --apply
 ```
 
-Codex 下次启动时读到新目录。`audit` 输出的 `in_sync_with_live_list` 为 `false` 时，说明目录落后于 CPA，需要再同步一次。
+Codex 下次启动时读到新目录。`audit` 输出的 `in_sync_with_live_list` 为 `false` 时，说明目录落后于 CPA，需要再同步一次；`codex_load_error` 不为空说明当前目录 Codex 读不了。CPA 刚重启、账号还没加载完时列表可能暂时变短，这仍是可用的目录，缺的模型下一次同步会回来。
 
 ## 仓库结构
 

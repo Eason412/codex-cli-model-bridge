@@ -19,7 +19,7 @@
 - **`bin/refresh-catalog` left Desktop on native catalog**: that command disables routing, and `--help` still runs it. Restore with `src/config-manager.mjs enable` after removing an unmanaged leftover `model_catalog_json` pointing at `native-catalog-pre-router.json`.
 - **Transparent route returns 401**: Codex was pointed directly at authenticated port `8317`, or the header-rewriting proxy is down. Keep `openai_base_url` on `127.0.0.1:8318`; do not change `auth.json` from ChatGPT to API-key mode. On macOS check the LaunchAgent; on Windows check that `node transparent_proxy.mjs` is still running.
 - **ChatGPT plugins/account features disappear**: the root credential was switched to API-key auth. Restore the ChatGPT `auth.json` before continuing; never use `forced_login_method = "api"` as a probe against the shared Codex home.
-- **WebSocket retries on a third-party model**: set the managed catalog entry's `prefer_websockets` to `false` and resync. HTTP Responses is the compatibility baseline.
+- **WebSocket retries on a third-party model**: set `prefer_websockets: false` for that model in `overrides.json` (or its `models.d` manifest) and resync; hand edits to the generated catalog are overwritten. HTTP Responses is the compatibility baseline.
 - **Subagent fails with HTTP 422 and `ModelInput`**: Codex Multi-Agent v2 sent a private `agent_message` item that the third-party Responses endpoint does not deserialize. Enable CLIProxyAPI's official `codex.optimize-multi-agent-v2` compatibility transform and verify with `probe-multi-agent`. Keep the 8318 transparent proxy limited to header rewriting.
 - **Child starts but does not receive its task, uses another model, or inherits unexpected context**: inspect plugin conversion, the actual callable schema, role overrides and child records using [spawn-compatibility.md](spawn-compatibility.md). Protocol-marker success still requires an authorized native spawn check for the affected scenario.
 - **Multiple CPA installations or local compatibility patches**: identify the listener's actual executable and service manager before any restart or upgrade. `configure-multi-agent` does not restart services; preserve required patches and avoid starting a second listener.
@@ -32,12 +32,10 @@ Backups stay next to their source:
 
 - `~/.codex/config.toml.backup-<timestamp>`
 - `~/.codex/cli-proxy.config.toml.backup-<timestamp>`
-- `~/.codex/model-catalog-cli-proxy.json.backup-<timestamp>`
+- `<catalog>.previous`: the catalog before the last sync that changed it
 
-To roll back, copy the chosen backup over its source, preserve mode `0600`, and start a new Codex task. Restore both files when a Provider and catalog change were applied together.
+To roll back, copy the chosen backup over its source, preserve mode `0600`, and start a new Codex task. Restore both files when a Provider and catalog change were applied together. The next sync regenerates the catalog from the live list again, so fix the cause (overrides or CPA) rather than relying on a restored catalog.
 
 `restore-default` also removes `openai_base_url`. The transparent proxy process or LaunchAgent may remain running harmlessly; stop it only through an explicit cleanup request after the root config has been restored.
 
 Invoke the bridge with `uv run <skill-dir>/scripts/bridge.py` on all platforms. If `cliproxyapi` is not on PATH, pass `--proxy-binary` and `--proxy-config`. On Windows, the isolated profile plus `codex --profile cli-proxy` is enough; do not block on LaunchAgents or Homebrew.
-
-The bridge state file tracks ownership only. Removing it does not restore configuration; use the backups.
