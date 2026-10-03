@@ -2,60 +2,99 @@
 
 [中文](README.md) | English
 
-**Use your Coding Plan and subscription models directly in Codex.** This tool connects Codex to CLIProxyAPI (CPA) running on your machine, so models such as Kimi, Gemini and DeepSeek appear in the same model picker as GPT, while your ChatGPT sign-in, account features and task history stay intact. New models show up on their own: no code changes, no waiting for a new release.
+**Coding Plan and subscription models, directly in Codex.** This tool connects Codex to CLIProxyAPI (CPA) running on your machine, so models such as Kimi and Gemini share one model picker with GPT, without affecting your ChatGPT sign-in, account features or task history. New models sync automatically, with no code changes and no waiting for a new release.
 
-A Coding Plan is a subscription that vendors such as Moonshot (Kimi) and Zhipu offer for coding tools. CPA is an open-source proxy that runs locally, signs in to those accounts and forwards requests to them.
+- **Coding Plan**: a subscription that vendors such as Moonshot (Kimi) and Zhipu offer for coding tools.
+- **CPA**: an open-source proxy that runs locally, signs in to those accounts and forwards requests to them.
 
 Current development version: V0.0.5 (unreleased) · [Changelog](changelogs/V0.0.5.md) (Chinese); latest release: [V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4). Derived from [codex-cli-model-bridge in Zhijian Skills](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge).
 
-> **Prerequisite: CPA.** This tool connects Codex to CPA; it does not replace it. If you do not have CPA yet, the setup manual installs it first.
+> ⚠️ **Prerequisite: a running CPA.** This tool connects Codex to CPA and does not replace it; if CPA is not installed yet, the setup manual installs it first.
 
-## Why use it
+## ✨ Features
 
-- **New models arrive automatically.** The model list comes straight from CPA. Once a daily sync is scheduled, a model that appears in CPA today is in the Codex model picker tomorrow: no code to change, no config to write, no release to wait for.
-- **Keep your sign-in and your history.** Many setups switch Codex to a third-party model provider, which makes your earlier tasks disappear from the task list. On macOS this tool keeps the provider as OpenAI and only points the request URL at a local proxy, so Codex stays signed in with ChatGPT and your account features and task history remain.
-- **Customize with one line.** Hide a model or change its default reasoning effort with a single line in a small file, wildcards like `gpt-image-*` included. Anything you leave out keeps the defaults CPA provides.
-- **Every change is checked and reversible.** A new model catalog is written only after Codex itself has loaded it successfully. Changes to the main Codex config are shown to you first and written only after you confirm. Both the main config and the catalog are backed up before they change, so you can restore them at any time. The CPA key is never written into Codex config and never printed.
-- **Connected means actually working.** Verification has the model actually run a command; merely appearing in the model list does not count.
+- 🔄 **Automatic model sync**: the model list comes straight from CPA. With a daily scheduled sync, a model added to CPA appears in the Codex model picker the next day, with no code to change, no config to write and no release to wait for.
+- 🔐 **Sign-in and task history preserved**: typical setups switch Codex to a third-party model provider, which removes earlier tasks from the task list. On macOS this tool keeps the provider as OpenAI and only points the request URL at a local proxy, leaving your ChatGPT sign-in, account features and task history untouched.
+- 🎛️ **Minimal personal settings**: hiding a model or changing its default reasoning effort takes one line in a personal settings file, with wildcards such as `gpt-image-*`. Anything not set keeps the defaults CPA provides.
+- 🛡️ **Checked writes with rollback**: a new model catalog is written only after it passes Codex's own parser; changes to the main Codex config are previewed and written only after confirmation; both the main config and the catalog are backed up before every change and can be restored at any time. The CPA key never enters Codex config or any output.
+- ✅ **Acceptance by real calls**: a model counts as connected only after it actually runs a command, not merely by appearing in the model list.
+- 🤖 **Setup manual for agents**: Claude Code, Codex, Gemini CLI and other agents can follow [SETUP.md](SETUP.md) to install, configure and verify everything, asking for confirmation before installing software, changing configuration, restarting services or spending model quota.
 
-## How it works
+## 🧩 Supported models
+
+Every model CPA can forward enters the Codex model catalog: native Codex models keep their official parameters, and CPA generates parameters for the others. The table lists the model families tested so far, with examples as of October 2026; the models actually available are whatever CPA returns.
+
+| Model family | Example models | Connected in CPA via | Test record |
+| --- | --- | --- | --- |
+| GPT (OpenAI) | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | ChatGPT / Codex account | ✅ Current version, tool calls pass |
+| Gemini | `gemini-3.8-flash` | Antigravity; CPA also supports Gemini CLI, AI Studio and Vertex AI | ✅ Earlier versions, subagent task passes |
+| Kimi | `kimi-k3`, `kimi-k2.8` | Kimi Code plan | ✅ Earlier versions, tool calls pass |
+
+Earlier versions means V0.0.4 and before: the model catalog came from hand-written manifests, while requests took the same transparent proxy and CPA route as now.
+
+## ⚙️ How it works
 
 ```text
 Codex ──► local transparent proxy ──► CPA ──► Coding Plan / subscription services
           127.0.0.1:8318               127.0.0.1:8317
 ```
 
-- **Transparent proxy**: a small local service installed by this tool. Codex sends requests to it; it swaps in the CPA key and forwards them to CPA unchanged.
-- **CPA**: routes each request to the right account and provider by model name.
-- **Model catalog**: the JSON file the Codex model picker reads. This tool builds it from CPA's current model list, including context length, reasoning levels and other parameters, then applies your personal settings.
+| Component | Role |
+| --- | --- |
+| Transparent proxy | A local service installed by this tool. It receives Codex requests, swaps in the CPA key and forwards them unchanged |
+| CPA | Routes each request to the right account and provider by model name |
+| Model catalog | The JSON file the Codex model picker reads, generated by this tool from CPA's live model list plus your personal settings |
 
-Everyday requests pass only through the transparent proxy and CPA; this tool's command line runs only for setup, sync and checks. macOS uses the transparent proxy shown above by default, and it works in both the desktop app and the CLI. Windows defaults to a separate Codex config file used with `codex --profile cli-proxy`, leaving the main config untouched.
+Everyday requests pass only through the transparent proxy and CPA; this tool's command line runs only for setup, sync and checks. The ports shown are defaults.
 
-## Setting it up
+| Mode | Platform | Characteristics |
+| --- | --- | --- |
+| Desktop transparent proxy | macOS (default) | Keeps the ChatGPT sign-in; works in both the desktop app and the CLI |
+| Separate profile | Windows (default), fallback elsewhere | A separate Codex config file started with `codex --profile cli-proxy`; the main config is untouched |
 
-Let your AI agent do it. [SETUP.md](SETUP.md) in this repository is a setup manual written for agents: Claude Code, Codex, Gemini CLI and others can follow it step by step, and it tells them to stop and ask you before installing software, changing configuration, restarting services or spending model quota. Send your agent this:
+## 🚀 Setup
 
-> Clone https://github.com/Eason412/codex-cli-model-bridge, read its SETUP.md, and follow it to install and configure everything for me. Ask me before installing software, changing configuration, restarting services or spending model quota.
+Have an agent read [SETUP.md](SETUP.md) and follow its steps to install, configure and verify. After a Codex restart, the new models appear in the model picker.
 
-In outline, the agent confirms CPA is running (installing it first if needed), builds the model catalog from CPA's model list, connects Codex to CPA through the local transparent proxy, has one model actually run a command as the acceptance test, and, if you want, schedules a daily sync. Restart Codex afterwards and the new models appear in the model picker.
+Tasks that need you personally:
 
-Only two things need you personally: signing in to your Coding Plan or subscription accounts in CPA (usually in a browser), and, on macOS, keeping Codex signed in with your ChatGPT account. The agent checks for tools such as uv and Node.js and installs missing ones with your consent.
+- Signing in to your Coding Plan or subscription accounts in CPA, usually in a browser.
+- Keeping Codex signed in with ChatGPT on macOS.
 
-To adjust things later, just tell your agent. Hiding a model or changing its default reasoning effort goes in a personal settings file; giving every model the same context length, such as 500K, takes one line in the Codex config (Codex compacts automatically at 90% of the context window). See [Overrides and extra models](references/model-manifests.md).
+### Personal settings
 
-## Contributing
+| Setting | Location | Notes |
+| --- | --- | --- |
+| Hidden models, default reasoning effort | `~/.config/codex-cli-model-bridge/overrides.json` | Only fields that differ from the defaults; wildcards supported |
+| One context length for all models | `model_context_window` in Codex's `config.toml` | Capped at each model's own limit; Codex compacts automatically at 90% of the window |
+| Extra models | `~/.config/codex-cli-model-bridge/models.d/` | Only for models missing from CPA's list |
+
+Field details: [Overrides and extra models](references/model-manifests.md).
+
+## 📁 Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| [SETUP.md](SETUP.md) | Step-by-step setup manual for agents |
+| [SKILL.md](SKILL.md) | Maintenance, repair and safety rules for agents |
+| [scripts/bridge.py](scripts/bridge.py) | Command-line entry point |
+| [scripts/transparent_proxy.mjs](scripts/transparent_proxy.mjs) | Transparent proxy |
+| [references/](references/) | Fast mode, subagents, Windows, GLM, troubleshooting and other topics |
+| [tests/](tests/) | Regression tests |
+
+## 🤝 Contributing
 
 Compatibility fixes, improvements and documentation updates are welcome. Before opening a PR:
 
-- Keep each PR to one problem, without personal configuration or unrelated formatting changes.
-- Describe the problem with a minimal reproduction, the cause and your approach, and the checks you actually ran; say why any check was skipped instead of marking it as passed.
-- Run tests under a temporary HOME and CODEX_HOME. Tests must not read or write your real configuration, or start or stop a real CPA or proxy.
-- For model-specific changes, include the model ID, where its metadata came from, the CPA upstream type, and a verification result with sensitive data removed.
-- Check diffs, logs and screenshots for keys, OAuth data, private paths and internal addresses before submitting.
-- The repository ships no model IDs; personal preferences stay outside it.
+- **Scope**: one problem per PR, without personal configuration or unrelated formatting changes.
+- **Description**: the problem with a minimal reproduction, the cause and approach, and the checks actually run; skipped checks state the reason and are never marked as passed.
+- **Tests**: run under a temporary HOME and CODEX_HOME, without reading or writing real configuration or starting or stopping a real CPA or proxy.
+- **Model-specific changes**: the model ID, metadata source, CPA upstream type and a redacted verification result.
+- **Privacy**: diffs, logs and screenshots checked for keys, OAuth data, private paths and internal addresses.
+- **Model IDs**: none are built into the repository; personal preferences stay outside it.
 
-The full requirements are in the [contributing guide](CONTRIBUTING.md) (Chinese); the PR template is filled in automatically.
+Full requirements: [contributing guide](CONTRIBUTING.md) (Chinese); the PR template is filled in automatically.
 
-## License
+## 📄 License
 
 [MIT](LICENSE); the original copyright notice is retained.
