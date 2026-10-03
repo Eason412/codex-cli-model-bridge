@@ -212,7 +212,8 @@ class BridgeTests(unittest.TestCase):
             catalog = root / "catalog.json"
             fake_codex = root / "codex"
             catalog.write_text(json.dumps({"models": [{"slug": "grok-4.6"}]}), encoding="utf-8")
-            for scenario, command_exit in [("valid", 0), ("marker_only", None), ("failed_command", 1)]:
+            for scenario, command_exit in [("valid", 0), ("marker_only", None), ("failed_command", 1),
+                                           ("wrong_marker", 0)]:
                 with self.subTest(scenario=scenario):
                     fake_codex.write_text(
                         f"#!{sys.executable}\n"
@@ -220,7 +221,7 @@ class BridgeTests(unittest.TestCase):
                         "assert '--json' in sys.argv\n"
                         "assert 'CODEX_BRIDGE_SHELL_OK' in sys.argv[-1]\n"
                         "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
-                        "out.write_text('CODEX_BRIDGE_SHELL_OK', encoding='utf-8')\n"
+                        f"out.write_text({('not CODEX_BRIDGE_SHELL_OK' if scenario == 'wrong_marker' else 'CODEX_BRIDGE_SHELL_OK')!r}, encoding='utf-8')\n"
                         f"command_exit = {command_exit!r}\n"
                         "if command_exit is not None:\n"
                         " print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
@@ -236,7 +237,7 @@ class BridgeTests(unittest.TestCase):
                     valid = scenario == "valid"
                     self.assertEqual(proc.returncode, 0 if valid else 2, proc.stderr or proc.stdout)
                     result = json.loads(proc.stdout)["results"]["grok-4.6"]
-                    self.assertEqual(result["shell_executed"], valid)
+                    self.assertEqual(result["shell_executed"], command_exit == 0)
                     self.assertEqual(result["ok"], valid)
 
     def test_desktop_probe_uses_active_config_catalog_by_default(self) -> None:
@@ -359,6 +360,7 @@ class BridgeTests(unittest.TestCase):
                 "reversed": (list(reversed(commands)), 0),
                 "failed_command": ([commands[0], (commands[1][0], 1)], 0),
                 "process_failure": (commands, 1),
+                "wrong_marker": (commands, 0),
             }
             for scenario, (events, process_exit) in scenarios.items():
                 with self.subTest(scenario=scenario):
@@ -371,7 +373,7 @@ class BridgeTests(unittest.TestCase):
                         "assert 'CODEX_BRIDGE_TOOL_SEQUENCE_OK' in prompt\n"
                         "assert 'CODEX_BRIDGE_SHELL_OK' not in prompt\n"
                         "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
-                        "out.write_text('CODEX_BRIDGE_TOOL_SEQUENCE_OK', encoding='utf-8')\n"
+                        f"out.write_text({('not CODEX_BRIDGE_TOOL_SEQUENCE_OK' if scenario == 'wrong_marker' else 'CODEX_BRIDGE_TOOL_SEQUENCE_OK')!r}, encoding='utf-8')\n"
                         f"for command, command_exit in {events!r}:\n"
                         " print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
                         "'command':command,'status':'completed','exit_code':command_exit}}))\n"
@@ -389,7 +391,7 @@ class BridgeTests(unittest.TestCase):
                     result = json.loads(proc.stdout)["results"]["grok-4.6"]
                     self.assertTrue(result["shell"])
                     self.assertTrue(result["tool_sequence"])
-                    self.assertEqual(result["tool_sequence_executed"], scenario in {"valid", "process_failure"})
+                    self.assertEqual(result["tool_sequence_executed"], scenario in {"valid", "process_failure", "wrong_marker"})
                     self.assertEqual(result["ok"], scenario == "valid")
 
     def test_configure_writes_isolated_profile_and_is_idempotent(self) -> None:

@@ -489,10 +489,11 @@ def reasoning_levels(efforts: list[str]) -> list[dict]:
 
 
 def preferred_native_model(models: list[dict]) -> dict:
-    """Codex picker priority is ascending; use a stable slug tie-breaker."""
+    """Prefer visible native entries, then ascending priority and stable slug."""
     if not models:
         raise ValueError("native model cache is empty")
-    return min(models, key=lambda entry: (
+    visible = [entry for entry in models if entry.get("visibility") == "list"]
+    return min(visible or models, key=lambda entry: (
         entry.get("priority") if isinstance(entry.get("priority"), (int, float)) else float("inf"),
         entry["slug"],
     ))

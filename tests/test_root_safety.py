@@ -126,6 +126,7 @@ class RootSafetyTests(unittest.TestCase):
 
     def test_restore_selects_native_priority_without_changing_valid_selection(self):
         entries = [{**native_template(), "priority": 50},
+                   {**native_template(), "slug": "native-hidden", "priority": -10, "visibility": "hide"},
                    {**native_template(), "slug": "native-top", "priority": 0},
                    {**native_template(), "slug": "native-other", "priority": 2}]
         self.native.write_text(json.dumps({"models": entries}))

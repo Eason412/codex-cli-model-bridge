@@ -182,6 +182,18 @@ class CatalogContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "native model cache is empty"):
             bridge.build_entry(manifest, {})
 
+    def test_native_fallback_prefers_visible_entries_before_priority(self):
+        manifest = json.loads((SCRIPT.parents[1] / "models/gpt-6-astra.json").read_text())
+        entries = [{**native_template(), "slug": "hidden", "visibility": "hide", "priority": -100},
+                   {**native_template(), "slug": "visible", "visibility": "list", "priority": 10}]
+        fallbacks = {}
+        bridge.build_entry(manifest, {entry["slug"]: entry for entry in entries}, fallbacks)
+        self.assertEqual(fallbacks[manifest["slug"]]["selected"], "visible")
+        entries[1]["visibility"] = "hide"
+        fallbacks = {}
+        bridge.build_entry(manifest, {entry["slug"]: entry for entry in entries}, fallbacks)
+        self.assertEqual(fallbacks[manifest["slug"]]["selected"], "hidden")
+
 
 if __name__ == "__main__":
     unittest.main()
