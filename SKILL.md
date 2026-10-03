@@ -13,7 +13,7 @@ Resolve this loaded Skill directory as `<skill-dir>` and use `uv run <skill-dir>
 
 ## Audit and mode selection
 
-Start with `uv run <skill-dir>/scripts/bridge.py audit`. Inspect redacted TOML validity and permissions, Provider/history counts and integrity digest, ChatGPT or command-backed auth, active catalog, live `/v1/models`, missing routes and bridge ownership. Versions identify the installation, not proof of compatibility. Pass `--proxy-config` and the verified listener's `--proxy-binary` when discovery identifies another installation.
+Start with `uv run <skill-dir>/scripts/bridge.py audit`. Inspect redacted TOML validity and permissions, Provider/history counts and integrity digest, ChatGPT or command-backed auth, active catalog, live `/v1/models`, missing routes and whether the catalog still matches the live list (`in_sync_with_live_list`). Versions identify the installation, not proof of compatibility. Pass `--proxy-config` and the verified listener's `--proxy-binary` when discovery identifies another installation.
 
 | Active path | Action |
 | --- | --- |
@@ -35,7 +35,7 @@ All writes preview without `--apply`; use verified live route IDs for `<model-id
 | --- | --- |
 | `audit` | Read-only configuration, history, route and catalog checks. |
 | `configure` | Isolated profile and owner-only credential helper; preserves unrelated profile sections and root config. |
-| `sync` | Catalog preview; apply after reviewing the whole diff and live routes. |
+| `sync` | Regenerate the catalog from CPA's live list plus personal overrides; preview, then `--apply`. |
 | `configure-desktop` | Root Provider/catalog and transparent-runtime preview. |
 | `configure-multi-agent` | Preview CPA's `codex.optimize-multi-agent-v2` flag; never restarts CPA. |
 | `restore-default` | Explicit history repair: restore dominant Provider/native model and remove root catalog/base-URL overrides. |
@@ -44,9 +44,9 @@ All writes preview without `--apply`; use verified live route IDs for `<model-id
 | `probe --desktop --shell --models <model-id>` | Require a real successful `pwd` event. |
 | `probe --desktop --tool-sequence --models <model-id>` | Require ordered successful `pwd` and `git --version` events. |
 | `probe-multi-agent --models <model-id>` | Synthetic `agent_message` delivery; not native spawn acceptance. |
-| `validate-manifest <path>` | Validate metadata without installing a route. |
+| `validate-manifest <path>` | Validate an extra-model manifest for `models.d` without installing a route. |
 
-The isolated helper reads the existing CPA client key without copying it into Codex config. Python helpers use a stable host interpreter, not the uv/virtual environment running the bridge; retain an existing Ruby `.rb` helper. Use `codex --profile cli-proxy` for the installed profile. Sync's live authentication reads command-backed auth under `[model_providers.cli_proxy]`, not the transparent root's ChatGPT login. If root config lacks that Provider, pass the configured isolated file with `--config <codex-home>/cli-proxy.config.toml`. If the Desktop catalog differs, also pass `--catalog <active-catalog-path>` matching root `model_catalog_json`; never skip live checks to bypass missing auth.
+The isolated helper reads the existing CPA client key without copying it into Codex config. Python helpers use a stable host interpreter, not the uv/virtual environment running the bridge; retain an existing Ruby `.rb` helper. Use `codex --profile cli-proxy` for the installed profile. Sync reads the route Codex itself uses: a Desktop-transparent root goes through `openai_base_url`, where the proxy adds credentials; otherwise `--config` must carry command-backed auth under `[model_providers.cli_proxy]` (for example `<codex-home>/cli-proxy.config.toml`). The target catalog defaults to that config's `model_catalog_json`.
 
 ## Preview and apply
 
@@ -77,19 +77,25 @@ CPA config writes and service changes are separate. Identify the listener execut
 
 ## Catalog synchronization
 
-Full sync refreshes native metadata from read-only `models_cache.json` and overlays selected manifests. Metadata never selects a Provider. If a native template is missing, prefer visible native entries by smallest `priority` with a stable slug tie-break; use the full cache only when none are visible. The receipt reports `template_fallbacks` for review. Speed capabilities are not inferred from that fallback.
+Sync fetches CPA's Codex-format list (`/models?client_version=<installed Codex>`) through that route and writes it as the catalog. CPA serves each routed model with full Codex metadata, so a new model needs no manifest, code change or release; the repository ships no model IDs.
 
-Default state is `~/.config/codex-cli-model-bridge`; `--state-dir` relocates state, personal `models.d`, `enabled-manifests.json` and policy lookup together. Policy precedence is explicit `--catalog-policy`, personal `catalog-policy.json`, then `<skill-dir>/policies/catalog.json`. Policies are complete files, not overlays. Retain exact slugs in `protected_native_model_ids`; manifests cannot `supersede` them. Hidden native IDs remain with `visibility = "hide"`, preserving tasks and routes.
+Personal preferences live in `<state-dir>/overrides.json` (default state dir `~/.config/codex-cli-model-bridge`):
 
-Full sync uses bundled manifests enabled by `{"schema_version": 1, "enabled": ["<model-id>"]}` when that file exists, plus personal manifests. Invalid, duplicate or unknown enabled IDs block sync. Explicit `--models <comma-separated-ids>` selects available manifests without consulting the enabled file; unselected entries and order remain intact except explicit supersedes removals. Subset sync does not refresh other native metadata or reapply its visibility policy, and cannot combine with `--prune-managed`.
+```json
+{"schema_version": 1, "models": {"gpt-image-*": {"visibility": "hide"}, "gpt-6-sol": {"default_reasoning_level": "medium"}}}
+```
 
-Preserve manual entries and report collisions; `--adopt` needs authorization for the exact slug. Previously managed entries with missing manifests remain unless explicitly pruned. Full `--prune-managed` removes stale custom entries but restores native counterparts under the visibility policy. Review entire `changes`, `field_changes` and `order_changed`, not only selected models; onboarding must not alter unrelated entries. See [model-manifests.md](references/model-manifests.md) for metadata and route evidence.
+Keys are exact IDs or globs. Globs apply in file order, then exact IDs; values replace top-level catalog fields and `null` removes one. Unmatched keys are reported, not errors. For one context size across models prefer Codex's top-level `model_context_window`, which Codex clamps to each model's `max_context_window`; do not raise `max_context_window` beyond what the route has proven.
+
+`<state-dir>/models.d/*.json` only adds routes that `/v1/models` lists but the Codex-format list lacks; see [model-manifests.md](references/model-manifests.md). A manifest whose ID is in the live list is reported under `manifests_shadowed_by_live_list` and ignored.
+
+Sync writes nothing when the live list fails, is empty or malformed, overrides are invalid, an extra route is missing, or the result would drop the config's `model`, `review_model` or `[agents].default_subagent_model`. Unchanged output is not rewritten; a change keeps one `<catalog>.previous` copy. Receipts list added and removed IDs and the changed field names per model. Legacy `catalog-policy.json`, `enabled-manifests.json` and `state.json` are reported under `legacy_files_ignored`. These guards make unattended runs safe, for example after the daily CPA upgrade and service restart.
 
 ## Verification
 
 Probe affected models through the active mode. Text probes require the exact expected final marker; shell/sequence probes also require real successful command events, not printed simulations. `--desktop` reads the active root catalog; `--catalog` supplies an explicit one-shot override to Codex. `probe --config` accepts only active `$CODEX_HOME/config.toml`; for a named configuration use `--profile <name>` without `--desktop`. Probes do not rewrite config or copy credentials.
 
-Direct HTTP success or a listed ID is not Codex acceptance. Synthetic multi-agent probes report `native_spawn_tested=false`; claim spawn support only after an authorized real child task verifies delivery, tools, result and recorded model/effort. Do not spawn merely because a reference was read. For third-party shell failures caused by inherited `tool_mode = "code_mode_only"`, test `"tool_mode": null` only in the affected manifest; never disable native code mode globally.
+Direct HTTP success or a listed ID is not Codex acceptance. Synthetic multi-agent probes report `native_spawn_tested=false`; claim spawn support only after an authorized real child task verifies delivery, tools, result and recorded model/effort. Do not spawn merely because a reference was read. For third-party shell failures caused by inherited `tool_mode = "code_mode_only"`, set `"tool_mode": null` only for the affected model in `overrides.json` or its manifest; never disable native code mode globally.
 
 Rerun audit and sync after changes; the second sync must be idempotent. See [troubleshooting.md](references/troubleshooting.md) for classification and rollback.
 
@@ -107,7 +113,7 @@ Apply checks relevant to the requested mode and change:
 
 - Root Provider stays aligned with history; root/history repairs preserve the integrity-checked inventory digest.
 - Selected isolated profile or Desktop bridge is valid and healthy; Desktop retains ChatGPT login.
-- Catalog has no unapproved collision; protected/hidden native entries remain and all managed/listed/default routes are live.
+- Audit reports the catalog in sync with the live list; listed and default routes are live.
 - Each affected model passes the Codex probe; requested shell, sequence, spawn and Fast checks have their own evidence.
 - Repeated sync makes no changes. Report versions, endpoints, mode/Provider, catalog changes, fallback receipts, probe results, backups and approved reload/rollback.
 

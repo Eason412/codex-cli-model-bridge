@@ -1,45 +1,45 @@
-# Private model manifests
+# Overrides and extra models
 
-Bundled manifests live in `models/*.json`. Personal manifests live in `<state-dir>/models.d/` (default `~/.config/codex-cli-model-bridge/models.d/`). They are metadata overlays applied to a current native Codex model template; use `--state-dir` consistently when previewing and applying.
+The catalog is CPA's live Codex-format list. Two personal files in `<state-dir>` (default `~/.config/codex-cli-model-bridge`) adjust it; use the same `--state-dir` when previewing and applying.
 
-Required fields:
+## overrides.json
 
-- `schema_version`: currently `1`
-- `slug`: exact model ID sent to CLIProxyAPI
-- `display_name`
-- `description`
-- `template_slug`: native Codex catalog model whose agent/runtime compatibility fields are inherited
-- `context_window` and `effective_context_window_percent`
-- `default_reasoning_level` and `reasoning_efforts`
-- `input_modalities`
-- `priority`
+Changes fields of models that are already in the live list:
 
-Optional fields:
-
-- `supports_search_tool`: default `false`
-- `supports_image_detail_original`: default inherited
-- `additional_speed_tiers` and `service_tiers`: when omitted, inherit from the exact matching model in the native cache; when no exact native model exists, default to empty arrays. Explicit values, including empty arrays, override this default. Never inherit another model's speed capabilities through `template_slug`. Non-native overrides require verified route tier semantics; see [fast-mode.md](fast-mode.md).
-- `supersedes`: previously managed route IDs that this verified route replaces in the generated catalog. It must not contain a native ID listed in the catalog policy's `protected_native_model_ids`; Codex App Thread creation addresses those exact IDs even when a cosmetic alias exists. A private manifest must never supersede those native IDs.
-
-Do not copy marketing claims blindly. Resolve context and reasoning controls from an exact Provider catalog or observed route, and then confirm the route using `codex exec`.
-
-Codex requires many internal model-catalog compatibility fields. The bridge inherits those fields from a current native template so the managed models stay aligned after Codex updates. The manifest controls only the fields that are specific to the external route.
-
-When `template_slug` is absent from the native cache, sync prefers entries with `visibility = "list"` and the smallest `priority` (highest catalog rank), using slug order to break ties. Only when none are visible does it select from the full native cache. The receipt reports `template_fallbacks` with the requested and actual template. Inspect that receipt rather than treating a historical GPT slug as mandatory. The fallback does not grant Fast; exact-model speed semantics above still apply.
-
-Before adding a manifest:
-
-1. Confirm the route is Responses-compatible.
-2. Confirm it appears in CLIProxyAPI `/v1/models`.
-3. Choose the closest current native Codex template.
-4. Preview `sync` and inspect collisions.
-5. Apply, run `probe`, and repeat `sync` for idempotency.
-
-Use the deterministic bridge entry point:
-
-```sh
-uv run <skill-dir>/scripts/bridge.py validate-manifest <path>
-uv run <skill-dir>/scripts/bridge.py sync --models <model-id>
+```json
+{
+  "schema_version": 1,
+  "models": {
+    "gpt-image-*": {"visibility": "hide"},
+    "kimi-k3": {"tool_mode": null},
+    "gpt-6-sol": {"default_reasoning_level": "medium"}
+  }
+}
 ```
 
-Sync requires command-backed auth in `[model_providers.cli_proxy]`; if root config lacks it, pass the configured isolated file with `--config <codex-home>/cli-proxy.config.toml`, including for a Desktop-transparent catalog. Use `--catalog <active-catalog-path>` when the target differs from the isolated default, and retain live route checks. Apply only after reviewing the complete catalog receipt, then probe through the active mode. A manifest and `/v1/models` listing are not sufficient proof of Codex compatibility.
+- Keys are exact model IDs or globs (`*`, `?`, `[...]`). Globs apply in file order, then the exact ID, so an exact key wins.
+- Each value replaces top-level catalog fields; `null` removes the field. `slug` cannot change.
+- Checked fields: `visibility` is `list` or `hide`; `context_window`, `max_context_window`, `auto_compact_token_limit`, `effective_context_window_percent` (at most 100) and `priority` are positive integers; `default_reasoning_level` must be one of the model's `supported_reasoning_levels`.
+- Keys that match nothing are listed in `overrides_unmatched` so retired IDs can be removed later; they do not block sync.
+
+Prefer Codex settings over catalog edits where they exist: `model_context_window` sets one context size for every model, clamped by each model's `max_context_window`, and `model_reasoning_effort` sets the default effort.
+
+## models.d
+
+Adds a route that CPA's `/v1/models` lists but its Codex-format list lacks. One JSON file per model:
+
+- Required: `schema_version` (`1`), `slug` (exact CPA model ID), `display_name`, `description`, `context_window`, `effective_context_window_percent`, `default_reasoning_level`, `reasoning_efforts`, `input_modalities`, `priority`.
+- Optional: `template_slug`, a live model whose Codex compatibility fields are copied. When absent or no longer listed, sync uses the visible live model with the smallest `priority` and reports a requested-but-missing template in `template_fallbacks`.
+- Optional: `supports_search_tool` (default `false`), `supports_image_detail_original`, `tool_mode` (`null` removes an inherited `code_mode_only`), `additional_speed_tiers` and `service_tiers`. Speed tiers default to empty and are never copied from the template; declare them only after verifying the route's tier semantics, see [fast-mode.md](fast-mode.md).
+- `supersedes` is rejected: retired IDs leave the catalog when they leave the live list.
+
+A manifest whose ID appears in the live list is ignored and reported under `manifests_shadowed_by_live_list`; move any still-wanted difference into `overrides.json` and delete the manifest.
+
+Resolve context and reasoning controls from the provider's exact catalog or an observed route, not marketing claims. Before adding a manifest:
+
+1. Confirm the route is Responses-compatible and listed in CPA `/v1/models`.
+2. Validate it: `uv run <skill-dir>/scripts/bridge.py validate-manifest <path>`.
+3. Preview `sync`, review the receipt, then apply.
+4. Run `probe` for the model and repeat `sync` to confirm it is unchanged.
+
+A manifest and a `/v1/models` listing are not proof of Codex compatibility.

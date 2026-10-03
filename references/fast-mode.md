@@ -4,13 +4,7 @@
 
 Fast 表示同一模型的服务档位。以 `gpt-6-astra` 为例，标准与 Fast 请求均使用该 ID；模型选择器通过 `additional_speed_tiers` 和 `service_tiers` 显示可用速度。
 
-同步规则：显式模型清单字段优先，其次采用原生缓存中同名模型的字段；无同名原生条目时使用空数组。`template_slug` 仅提供通用兼容字段，不用于推断速度能力。需要恢复被清空的原生 Fast 信息时，刷新原生模型缓存后运行 `sync`，无需创建别名。
-
-```sh
-uv run <skill-dir>/scripts/bridge.py sync --models <model-id>
-```
-
-`<skill-dir>` 是本 Skill 的绝对目录，`<model-id>` 是已核实的同名原生模型 ID。同步在线认证读取 `[model_providers.cli_proxy]` 的命令式认证；根配置没有该 Provider 时，传入已配置的 `--config <codex-home>/cli-proxy.config.toml`，透明桥的 ChatGPT 根登录不能代替它。`<codex-home>` 默认是 `~/.codex`，设置 `CODEX_HOME` 时使用该目录；透明桥的目录路径不同时，另加 `--catalog <active-catalog-path>` 指向根配置的 `model_catalog_json`。不要跳过在线路由检查。核对预览后添加 `--apply`；同步保留个人显示策略，不切换默认模型或速度。
+同步规则：目录直接沿用 CPA 实时列表中各模型的速度档位，上游新增或撤下 Fast 时随下一次 `sync` 更新，无需创建别名。`models.d` 补充的模型只使用清单里显式声明的档位，未声明时为空，不从 `template_slug` 借用。运行 `uv run <skill-dir>/scripts/bridge.py sync` 预览，核对后加 `--apply`；同步保留个人偏好，不切换默认模型或速度。
 
 ## 模式设置
 

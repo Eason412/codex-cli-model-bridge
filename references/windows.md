@@ -25,7 +25,7 @@ Keep remote management disabled. CPA exposed on LAN requires a client API key; t
 
 Unix mode `0600` is not a Windows ACL. Keep these files inside the current user profile and do not share them.
 
-`--state-dir <path>` relocates ownership state, personal `models.d`, `enabled-manifests.json` and personal catalog policy together. Explicit `--catalog-policy` and `--enabled-manifests` still override their corresponding defaults. `CODEX_HOME` controls Codex paths, not bridge state.
+`--state-dir <path>` relocates the personal `overrides.json` and `models.d` together. `CODEX_HOME` controls Codex paths, not bridge state.
 
 ## Default workflow
 

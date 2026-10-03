@@ -50,7 +50,7 @@ Keep root `model_provider = "openai"` and the existing merged catalog. Do not ru
 - Do not register GLM only in CLIProxyAPI and expect the Router picker to show it. CLIProxyAPI uses `:8317`; Desktop Router uses `:4202`.
 - Do not reinstall Router or switch its Node binary as part of adding GLM.
 - Do not copy the key into `experimental_bearer_token`.
-- Do not add `glm-5.3` to this Skill's `models/*.json` catalog for a Router-owned Desktop. That catalog is for the isolated CLIProxyAPI profile / 8318 path.
+- Do not add `glm-5.3` to this Skill's `models.d` for a Router-owned Desktop. The bridge catalog is for the isolated CLIProxyAPI profile / 8318 path.
 
 ## Isolated CLIProxyAPI profile
 

@@ -1,8 +1,8 @@
 # Codex CLI Model Bridge
 
-让 Codex 通过本机 CLIProxyAPI（CPA）使用 Coding Plan／订阅模型的 Skill 与命令行工具：检查 Codex 配置和 Provider，同步模型目录，部署本地透明代理，并实际调用模型做验证。
+让 Codex 通过本机 CLIProxyAPI（CPA）使用 Coding Plan／订阅模型的 Skill 与命令行工具：检查 Codex 配置和 Provider，按 CPA 的实时模型列表生成模型目录，部署本地透明代理，并实际调用模型做验证。
 
-当前版本：[V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4) · [更新日志](changelogs/V0.0.4.md)
+当前开发版本：V0.0.5（未发布） · [更新日志](changelogs/V0.0.5.md)；已发布版本：[V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4)。
 
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
@@ -15,7 +15,7 @@ Codex ──► 本地透明代理 ──► CLIProxyAPI ──► Coding Plan�
           127.0.0.1:8318     127.0.0.1:8317
 ```
 
-端口为默认值。模型目录决定 Codex 选择器里显示哪些模型及其参数；CPA 按请求中的模型 ID 连接上游。Codex 一个任务只用一个 Provider，目录条目不能把单个模型路由到另一个 Provider，所以接入时保持原有 Provider 身份，不改写历史任务。
+端口为默认值。模型目录决定 Codex 选择器里显示哪些模型及其参数，由本工具从 CPA 的实时列表生成；CPA 按请求中的模型 ID 连接上游。Codex 一个任务只用一个 Provider，目录条目不能把单个模型路由到另一个 Provider，所以接入时保持原有 Provider 身份，不改写历史任务。
 
 | 模式 | 适用 | 做法 |
 | --- | --- | --- |
@@ -24,19 +24,11 @@ Codex ──► 本地透明代理 ──► CLIProxyAPI ──► Coding Plan�
 
 自定义 Provider 需要 Responses API，只支持 Chat Completions 的上游不够用。
 
-## 支持的模型
+## 模型来源
 
-通过 CPA 的 `/v1/models` 核对实际可用的模型 ID，再用适配清单补充上下文窗口、输入模态和推理档位，生成 Codex 模型目录。内置清单：
+CPA 按 Codex 的格式提供模型列表，每个模型带上下文、推理档位、输入模态、速度档位和工具设置。`sync` 直接拿这份实时列表生成 Codex 模型目录，再叠加你的个人偏好。仓库不写任何模型 ID，新模型随 CPA 升级出现在列表里，下一次同步就进入 Codex，不需要改代码、写清单或等新版本。
 
-| 模型系列 | 内置适配清单 |
-| --- | --- |
-| Kimi | `kimi-k3` |
-| Gemini | `gemini-3.7-flash`、`gemini-3.8-flash` |
-| DeepSeek | `deepseek-v4-pro`、`deepseek-v4-flash` |
-| Grok | `grok-4.6` |
-| GPT | `gpt-6-astra`；其他原生条目从 Codex 模型缓存继承 |
-
-新增型号的清单格式见 [模型清单说明](references/model-manifests.md)。Coding Plan／订阅的认证和额度由 CPA 及对应上游处理，本工具只使用 CPA 暴露的模型 ID，不保存上游账号凭据；GLM Coding Plan 的接入见 [接入参考](references/glm-coding-plan.md)。模型是否可用以 CPA 的 `/v1/models` 和实际探测结果为准。
+少数模型只出现在 CPA 的 `/v1/models`、不在 Codex 格式列表里时，才需要在 `models.d` 补一份清单，格式见 [覆盖与补充模型](references/model-manifests.md)。Coding Plan／订阅的认证和额度由 CPA 及对应上游处理，本工具不保存上游账号凭据；GLM Coding Plan 的接入见 [接入参考](references/glm-coding-plan.md)。模型是否可用以实际探测结果为准。
 
 ## 环境准备
 
@@ -96,14 +88,12 @@ Codex 支持符号链接形式的 Skill 目录，见 [官方说明](https://lear
    uv run <skill-dir>/scripts/bridge.py configure --apply
    ```
 
-3. **同步模型目录。** 预览会列出全目录的变更，确认除目标模型外其他条目不变后再应用。
+3. **生成模型目录。** 预览列出新增、移除的模型和每个模型变化的字段，确认后应用：
 
    ```sh
    uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml
    uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml --apply
    ```
-
-   只同步部分模型用 `--models <id1>,<id2>`。
 
 4. **接入桌面透明代理。** 预览返回 `config_sha256`、`service_action`（`none` / `start` / `restart`）和运行文件的前后摘要；只显示受管的 `model`、`model_provider`、`model_catalog_json`、`openai_base_url` 四个字段，不打印其他配置和凭据。确认后带上摘要应用：
 
@@ -133,22 +123,37 @@ Windows 和隔离配置模式省略第 4 步，探测时去掉 `--desktop`，用
 | `probe-multi-agent --models <id>` | 经透明代理发送合成的子代理任务，检查任务正文是否完整送达；不等于原生 spawn 验收，后者见 [子代理兼容与维护](references/spawn-compatibility.md) |
 | `configure-multi-agent` | 预览 CPA 的 `codex.optimize-multi-agent-v2` 开关；应用同样需要预览摘要，不会重启 CPA |
 | `restore-default` | 历史任务不可见时的修复：恢复历史上占多数的 Provider 和原生默认模型，移除根配置里的目录和地址覆盖；不是常规安装步骤 |
-| `validate-manifest <path>` | 校验模型清单，不安装路由 |
+| `validate-manifest <path>` | 校验 `models.d` 里的补充清单，不安装路由 |
 
 GPT 的 Fast 档位默认不启用，目录继承、开关和单次探测见 [Fast 配置与验证](references/fast-mode.md)。各子命令的完整参数用 `--help` 查看；出问题时先看 [故障排查](references/troubleshooting.md)。
 
-## 个人文件
+## 个人偏好
 
-个人偏好和运行状态保存在仓库之外：
+个人偏好和运行状态保存在仓库之外，默认目录 `~/.config/codex-cli-model-bridge/`：
 
 | 位置 | 内容 |
 | --- | --- |
-| `~/.config/codex-cli-model-bridge/catalog-policy.json` | 个人模型显示策略（含 `protected_native_model_ids`、`hidden_native_model_ids`），存在时优先于仓库默认策略 |
-| `~/.config/codex-cli-model-bridge/models.d/` | 本机扩展的模型清单 |
-| `~/.config/codex-cli-model-bridge/enabled-manifests.json` | 本机启用的内置清单，存在时全量同步只处理列出的模型 |
+| `overrides.json` | 只写和上游不同的字段，例如隐藏某个模型、改默认推理档位；键可以是精确 ID 或 `gpt-image-*` 这类通配符 |
+| `models.d/` | 补充 Codex 格式列表里没有的模型 |
 | Codex / CPA 各自的配置和认证目录 | 登录、密钥及运行配置 |
 
-`sync --catalog-policy <path>` 临时指定另一份策略，优先级最高；`--state-dir <path>` 把状态、个人策略、`models.d/` 和启用清单一起换到指定目录。
+```json
+{"schema_version": 1, "models": {"gpt-image-*": {"visibility": "hide"}}}
+```
+
+字段写法见 [覆盖与补充模型](references/model-manifests.md)。`--state-dir <path>` 把这两项一起换到指定目录。旧版本的 `catalog-policy.json`、`enabled-manifests.json` 和 `state.json` 不再读取，同步回执会列出它们；原先隐藏的模型改写进 `overrides.json`。
+
+所有模型统一用一个上下文大小时，在 Codex 的 `config.toml` 顶部写 `model_context_window = 500000`，不必逐个改目录；Codex 会按各模型的 `max_context_window` 截断。Codex 在上下文用到窗口的 90% 时自动压缩，95% 是可用上限。
+
+## 自动同步
+
+`sync` 可以无人值守地运行：实时列表拉取失败、为空或格式不对，个人偏好不合法，或者结果会去掉配置正在使用的 `model`、`review_model`、`[agents].default_subagent_model` 时，一律不写入；内容没变不改文件；有变化时保留一份 `<目录>.previous` 用于回退。macOS 上可以把它放进每天升级 CPA 的脚本，在 CPA 和透明代理重启、端口恢复响应之后运行：
+
+```sh
+uv run <skill-dir>/scripts/bridge.py sync --apply
+```
+
+Codex 下次启动时读到新目录。`audit` 输出的 `in_sync_with_live_list` 为 `false` 时，说明目录落后于 CPA，需要再同步一次。
 
 ## 仓库结构
 
@@ -157,8 +162,6 @@ GPT 的 Fast 档位默认不启用，目录继承、开关和单次探测见 [Fa
 | [SKILL.md](SKILL.md) | 给 agent 的配置、修复和验证流程 |
 | [scripts/bridge.py](scripts/bridge.py) | 命令行入口 |
 | [scripts/transparent_proxy.mjs](scripts/transparent_proxy.mjs) | 本机 HTTP / WebSocket 认证头转发，并为旧版客户端补足 `Version` 头 |
-| [models/](models/) | 内置模型清单 |
-| [policies/catalog.json](policies/catalog.json) | 原生模型保护和显示策略 |
 | [references/](references/) | Fast、子代理、Windows、GLM、旧版 Kimi 兼容和故障排查等专题 |
 | [tests/](tests/) | 隔离配置与测试替身的回归测试 |
 
