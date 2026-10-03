@@ -7,6 +7,7 @@ Use this reference for third-party child-task failures, context inheritance, mod
 - Inspect the active schema and recorded multi-agent version, including restored tasks. Tool-description examples are not a complete model allowlist.
 - Check the child's recorded model/effort and role overrides, not its self-description or requested values alone.
 - Conversation inheritance is not filesystem or memory isolation. Verify inherited content from the actual child request when relevant.
+- 近 N 轮可能包含当前派发轮；完整历史 fork 会继承父模型和推理强度。
 - A task may require transport compatibility, tool compatibility and native spawn acceptance separately; one success does not prove the others.
 
 ## Message-loss diagnosis

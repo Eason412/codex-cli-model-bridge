@@ -25,7 +25,7 @@ Do not copy marketing claims blindly. Resolve context and reasoning controls fro
 
 Codex requires many internal model-catalog compatibility fields. The bridge inherits those fields from a current native template so the managed models stay aligned after Codex updates. The manifest controls only the fields that are specific to the external route.
 
-When `template_slug` is absent from the native cache, sync falls back to the native entry with the smallest `priority` (highest catalog rank), using slug order to break ties. The receipt reports `template_fallbacks` with the requested and actual template. Inspect that receipt rather than treating a historical GPT slug as mandatory. The fallback does not grant Fast; exact-model speed semantics above still apply.
+When `template_slug` is absent from the native cache, sync prefers entries with `visibility = "list"` and the smallest `priority` (highest catalog rank), using slug order to break ties. Only when none are visible does it select from the full native cache. The receipt reports `template_fallbacks` with the requested and actual template. Inspect that receipt rather than treating a historical GPT slug as mandatory. The fallback does not grant Fast; exact-model speed semantics above still apply.
 
 Before adding a manifest:
 

@@ -144,7 +144,7 @@ uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config
 uv run <skill-dir>/scripts/bridge.py configure-desktop
 ```
 
-该模式调整 Codex 根配置并部署本地代理。发生变更时应用需要预览返回的 `--expected-sha256`；根配置打印差异仅包含顶层受管字段，运行时另报变化标记和前后 SHA，不打印旧副本。配置和运行时均未变且代理健康时不会重写或启动服务，步骤见 [预览与应用](SKILL.md#preview-and-apply)。
+该模式调整 Codex 根配置并部署本地代理。配置变更或服务动作需要预览返回的 `--expected-sha256`；预览明确报告 `service_action=none/start/restart`、运行时及 plist 变化和前后 SHA，不打印旧副本。配置、运行时和期望 plist 均未变且代理健康时不会重写或启动服务，步骤见 [预览与应用](SKILL.md#preview-and-apply)。
 
 ### 模型调用验证
 
