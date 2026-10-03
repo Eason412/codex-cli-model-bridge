@@ -7,7 +7,7 @@
 - **Coding Plan 与订阅**：厂商面向编程工具推出的套餐与模型订阅，国内外均支持，例如国内的 Kimi、智谱 GLM 套餐，海外的 ChatGPT、Gemini 订阅。
 - **CPA**：本机运行的开源代理服务，负责登录上述账号并转发请求。
 
-当前开发版本：V0.0.5（未发布） · [更新日志](changelogs/V0.0.5.md)；已发布版本：[V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4)。本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
+当前版本：[V0.0.5](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.5) · [更新日志](changelogs/V0.0.5.md)。本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
 > ⚠️ **前提：本机需运行 CPA。** 本工具负责将 Codex 接入 CPA，不替代 CPA；尚未安装时，安装手册会先引导完成 CPA 的安装。
 

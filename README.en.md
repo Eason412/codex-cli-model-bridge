@@ -7,7 +7,7 @@
 - **Coding Plans and subscriptions**: plans and model subscriptions that vendors offer for coding tools, supported both in China and abroad, for example Kimi and Zhipu GLM plans in China and ChatGPT and Gemini subscriptions elsewhere.
 - **CPA**: an open-source proxy that runs locally, signs in to those accounts and forwards requests to them.
 
-Current development version: V0.0.5 (unreleased) · [Changelog](changelogs/V0.0.5.md) (Chinese); latest release: [V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4). Derived from [codex-cli-model-bridge in Zhijian Skills](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge).
+Current version: [V0.0.5](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.5) · [Changelog](changelogs/V0.0.5.md) (Chinese). Derived from [codex-cli-model-bridge in Zhijian Skills](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge).
 
 > ⚠️ **Prerequisite: a running CPA.** This tool connects Codex to CPA and does not replace it; if CPA is not installed yet, the setup manual installs it first.
 
