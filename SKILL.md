@@ -9,6 +9,8 @@ Maintain Codex configuration and catalogs for CLIProxyAPI (CPA). Codex selects o
 
 Desktop coexistence keeps `model_provider = "openai"`, ChatGPT login and a loopback `openai_base_url` pointing to the owner-only header proxy. All catalog models use that same Provider and bridge. Do not make `cli_proxy` or vendor `ZAI` the Desktop default when history belongs to `openai`. The isolated `cli-proxy.config.toml` profile is the Windows default and a fallback elsewhere. Custom Providers need the Responses API; Chat Completions alone is insufficient.
 
+First-time setup, step by step for any agent: [SETUP.md](SETUP.md).
+
 Resolve this loaded Skill directory as `<skill-dir>` and use `uv run <skill-dir>/scripts/bridge.py`. Require uv, Python 3.11+, Codex CLI and authenticated CPA routes; Desktop-transparent mode also needs Node.js.
 
 ## Audit and mode selection
