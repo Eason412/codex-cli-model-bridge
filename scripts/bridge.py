@@ -578,6 +578,25 @@ def config_diff(path: Path, before: str, after: str, context: int = 3) -> str:
     )
 
 
+def root_config_diff(path: Path, before: str, after: str) -> str:
+    """Print only managed root values, never raw lines or credential sections."""
+    fields = ("model", "model_provider", "model_catalog_json", "openai_base_url")
+
+    def view(text: str) -> str:
+        config = tomllib.loads(text)
+        return "".join(f"{key} = {json.dumps(config[key])}\n" for key in fields if key in config)
+
+    return config_diff(path, view(before), view(after))
+
+
+def require_apply_sha(args: argparse.Namespace, current_sha: str, changed: bool) -> None:
+    if args.expected_sha256 and args.expected_sha256 != current_sha:
+        emit({"status": "blocked", "error": "config changed after approval",
+              "expected_sha256": args.expected_sha256, "actual_sha256": current_sha}, 2)
+    if args.apply and changed and not args.expected_sha256:
+        emit({"status": "blocked", "error": "preview first and supply --expected-sha256 before applying changes"}, 2)
+
+
 def replace_yaml_section_bool(text: str, section: str, key: str, value: bool) -> str:
     lines = text.splitlines(keepends=True)
     section_pattern = re.compile(rf"^{re.escape(section)}:\s*(?:#.*)?$")
@@ -1021,28 +1040,24 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
 
     current = config_path.read_text(encoding="utf-8")
     current_sha = hashlib.sha256(current.encode()).hexdigest()
-    if args.expected_sha256 and current_sha != args.expected_sha256:
-        emit(
-            {
-                "status": "blocked",
-                "error": "config changed after approval",
-                "expected_sha256": args.expected_sha256,
-                "actual_sha256": current_sha,
-            },
-            2,
-        )
     updated = replace_top_scalar(current, "model_provider", "openai")
     updated = replace_top_scalar(updated, "openai_base_url", args.transparent_url)
     updated = replace_top_scalar(updated, "model_catalog_json", str(catalog_path))
     if args.default_model:
         updated = replace_top_scalar(updated, "model", args.default_model)
-    diff = config_diff(config_path, current, updated)
+    config_changed = updated != current
+    runtime_source = (SKILL_DIR / "scripts" / "transparent_proxy.mjs").read_text(encoding="utf-8")
+    runtime_before = runtime_path.read_text(encoding="utf-8") if runtime_path.exists() else None
+    runtime_changed = runtime_before != runtime_source
+    require_apply_sha(args, current_sha, config_changed or runtime_changed)
+    diff = root_config_diff(config_path, current, updated)
     result = {
         "status": "planned" if not args.apply else "unchanged",
         "finding_id": "models.desktop_transparent_proxy_missing",
         "config": str(config_path),
         "config_sha256": current_sha,
         "diff": diff,
+        "diff_scope": "managed_root_fields",
         "provider_counts": counts,
         "thread_inventory_before": inventory_before,
         "auth": auth,
@@ -1051,6 +1066,12 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
         "transparent_url": args.transparent_url,
         "authenticated_upstream": args.proxy_url,
         "runtime_script": str(runtime_path),
+        "runtime_changes": {
+            "changed": runtime_changed,
+            "before_sha256": hashlib.sha256(runtime_before.encode()).hexdigest() if runtime_before is not None else None,
+            "after_sha256": hashlib.sha256(runtime_source.encode()).hexdigest(),
+        },
+        "service_started": False,
         "launch_agent": str(launch_agent_path),
         "backup": None,
         "secrets_redacted": True,
@@ -1058,19 +1079,18 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
     if not args.apply:
         emit(result)
 
-    runtime_source = (SKILL_DIR / "scripts" / "transparent_proxy.mjs").read_text(encoding="utf-8")
-    runtime_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    atomic_write(runtime_path, runtime_source, 0o700)
-    launch_error = start_transparent_proxy(
-        node_path,
-        runtime_path,
-        helper_path,
-        args.transparent_url,
-        args.proxy_url,
-        launch_agent_path,
-    )
-    if launch_error or not wait_for_transparent_proxy(args.transparent_url):
-        emit({"status": "blocked", "error": launch_error or "transparent proxy health check failed"}, 2)
+    healthy = wait_for_transparent_proxy(args.transparent_url)
+    if runtime_changed:
+        atomic_write(runtime_path, runtime_source, 0o700)
+        result["status"] = "applied"
+    if runtime_changed or not healthy:
+        launch_error = start_transparent_proxy(
+            node_path, runtime_path, helper_path, args.transparent_url, args.proxy_url, launch_agent_path,
+        )
+        if launch_error or not wait_for_transparent_proxy(args.transparent_url):
+            emit({"status": "blocked", "error": launch_error or "transparent proxy health check failed"}, 2)
+        result["service_started"] = True
+        result["status"] = "applied"
 
     if updated != current:
         result["backup"] = str(backup(config_path))
@@ -1323,27 +1343,19 @@ def cmd_restore_default(args: argparse.Namespace) -> None:
         target_model = "gpt-5.6-sol" if "gpt-5.6-sol" in native_ids else native_models[0]["slug"]
     current = config_path.read_text(encoding="utf-8")
     current_sha = hashlib.sha256(current.encode()).hexdigest()
-    if args.expected_sha256 and current_sha != args.expected_sha256:
-        emit(
-            {
-                "status": "blocked",
-                "error": "config changed after approval",
-                "expected_sha256": args.expected_sha256,
-                "actual_sha256": current_sha,
-            },
-            2,
-        )
     updated = replace_top_scalar(current, "model_provider", target_provider)
     updated = replace_top_scalar(updated, "model", target_model)
     updated = remove_top_scalar(updated, "model_catalog_json")
     updated = remove_top_scalar(updated, "openai_base_url")
-    diff = config_diff(config_path, current, updated)
+    require_apply_sha(args, current_sha, updated != current)
+    diff = root_config_diff(config_path, current, updated)
     result = {
         "status": "planned" if not args.apply else "unchanged",
         "finding_id": "threads.default_provider_history_scope_mismatch",
         "config": str(config_path),
         "config_sha256": current_sha,
         "diff": diff,
+        "diff_scope": "managed_root_fields",
         "provider_counts": counts,
         "target_provider": target_provider,
         "target_model": target_model,
