@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -46,6 +47,7 @@ class CatalogContractTests(unittest.TestCase):
             proxy_config.write_text('codex:\n  optimize-multi-agent-v2: true\n')
             models_file = root / "models.json"
             args = bridge.parser().parse_args(["audit", "--config", str(config), "--state-dir", str(root),
+                "--transparent-url", "http://127.0.0.1:1/v1",
                 "--profile-config", str(root / "absent-profile"), "--proxy-config", str(proxy_config),
                 "--models-file", str(models_file), "--upstream-file", str(upstream)])
             all_ids = {"default-model", "visible-model"}
@@ -57,6 +59,7 @@ class CatalogContractTests(unittest.TestCase):
                 mocks.enter_context(patch.object(bridge, "proxy_version", return_value=("7.3.18", (7, 3, 18))))
                 mocks.enter_context(patch.object(bridge.subprocess, "run", return_value=subprocess.CompletedProcess(
                     [], 0, "codex-cli 0.160.0", "")))
+                codex_check = mocks.enter_context(patch.object(bridge, "codex_rejects_catalog", return_value=None))
                 for live, missing in [(set(), all_ids), (all_ids - {"default-model"}, {"default-model"}),
                                       ({"default-model"}, {"visible-model"}), (all_ids, set())]:
                     with self.subTest(live=live):
@@ -73,6 +76,12 @@ class CatalogContractTests(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertFalse(stale["catalog"]["in_sync_with_live_list"])
                 self.assertIn("model catalog differs from the live list; run sync", stale["findings"])
+                codex_check.return_value = "missing field `display_name`"
+                code, rejected = invoke(args)
+                self.assertEqual(code, 2)
+                self.assertEqual(rejected["catalog"]["codex_load_error"], "missing field `display_name`")
+                self.assertIn("Codex cannot load the model catalog", rejected["findings"])
+                codex_check.return_value = None
                 with patch.object(bridge, "live_model_ids", side_effect=OSError("fixture failure")):
                     code, failure = invoke(args)
                 self.assertEqual(code, 2)
@@ -130,13 +139,23 @@ class CatalogContractTests(unittest.TestCase):
             config = root / "config.toml"
             config.write_text('model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:1/v1"\n')
             target = root / "catalog.json"
+            # A stand-in codex: reports a version and echoes the catalog it is asked to load.
+            codex = root / "codex"
+            codex.write_text(f"#!{os.sys.executable}\n" + textwrap.dedent("""
+                import json, sys
+                if sys.argv[1:] == ["--version"]:
+                    print("codex-cli 0.160.0")
+                else:
+                    print(open(json.loads(sys.argv[-1].split("=", 1)[1])).read())
+                """))
+            codex.chmod(0o755)
             env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(root / "codex"),
                    "CLIPROXYAPI_CONFIG": str(root / "absent-proxy"), "PYTHONDONTWRITEBYTECODE": "1"}
             before_default = {p: p.read_bytes() for p in default_state.rglob("*") if p.is_file()}
             process = subprocess.run(
                 [os.sys.executable, str(SCRIPT), "sync", "--config", str(config), "--catalog", str(target),
                  "--state-dir", str(state), "--upstream-file", str(upstream), "--models-file", str(models_file),
-                 "--codex", str(root / "absent-codex"), "--apply"],
+                 "--transparent-url", "http://127.0.0.1:1/v1", "--codex", str(codex), "--apply"],
                 env=env, text=True, capture_output=True, check=False)
             result = json.loads(process.stdout)
             self.assertEqual(process.returncode, 0, result)

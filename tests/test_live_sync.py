@@ -36,6 +36,8 @@ class LiveSyncTests(unittest.TestCase):
         self.upstream = [entry("gpt-6-astra", priority=1), entry("gpt-6-sol", priority=2),
                          entry("gpt-image-2", visibility="hide", priority=9)]
         self.requests = []
+        self.codex_error = None
+        self.checked = []
 
     def write_config(self, extra: str = "") -> None:
         self.config.write_text(
@@ -51,12 +53,17 @@ class LiveSyncTests(unittest.TestCase):
             return {"models": self.upstream}
         return {"data": [{"id": item["slug"]} for item in self.upstream] + [{"id": "kimi-k3"}]}
 
-    def sync(self, *extra, expected=0, fetch=None):
+    def fake_codex_check(self, codex, path, slugs):
+        self.checked.append([entry["slug"] for entry in json.loads(Path(path).read_text())["models"]])
+        return self.codex_error
+
+    def sync(self, *extra, expected=0, fetch=None, cwd=None):
         args = bridge.parser().parse_args(["sync", "--config", str(self.config), "--state-dir", str(self.state), *extra])
         output = io.StringIO()
         with patch.object(bridge, "fetch_json", side_effect=fetch or self.fake_fetch), patch.object(
-            bridge.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "codex-cli 0.160.0\n", "")
-        ), contextlib.redirect_stdout(output):
+            bridge, "codex_client_version", return_value="0.160.0"
+        ), patch.object(bridge, "codex_rejects_catalog", side_effect=self.fake_codex_check), \
+                contextlib.chdir(cwd or self.root), contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as caught:
                 bridge.cmd_sync(args)
         self.assertEqual(caught.exception.code, expected, output.getvalue())
@@ -179,6 +186,122 @@ class LiveSyncTests(unittest.TestCase):
         self.assertEqual(result["source"]["mode"], "isolated-profile")
         self.assertEqual(self.requests[-1], ("http://127.0.0.1:8317/v1/models?client_version=0.160.0", "fixture-token"))
         self.assertNotIn("fixture-token", json.dumps(result))
+
+    def test_codex_rejection_keeps_the_current_catalog_and_its_backup(self):
+        self.sync("--apply")
+        self.upstream.append(entry("gpt-6.2-sol", priority=0))
+        self.sync("--apply")
+        current, previous = self.catalog.read_bytes(), self.catalog.with_name("catalog.json.previous").read_bytes()
+        self.upstream.append(entry("broken", priority=5))
+        self.codex_error = "missing field `display_name` at line 1 column 23"
+        result = self.sync("--apply", expected=2)
+        self.assertEqual(result["codex_error"], self.codex_error)
+        self.assertEqual(self.catalog.read_bytes(), current)
+        self.assertEqual(self.catalog.with_name("catalog.json.previous").read_bytes(), previous)
+        self.assertEqual(sorted(p.name for p in self.root.glob("*.candidate")), [])
+        self.assertIn("broken", self.checked[-1], "Codex saw the candidate, not the old catalog")
+
+    def test_codex_check_reads_codex_debug_models(self):
+        catalog = self.root / "check.json"
+        catalog.write_text(json.dumps({"models": [entry("a"), entry("b")]}))
+        cases = [
+            (subprocess.CompletedProcess([], 1, "", "Error: failed to parse: missing field `display_name`\n"),
+             "Error: failed to parse: missing field `display_name`"),
+            (subprocess.CompletedProcess([], 0, json.dumps({"models": [{"slug": "a"}]}), ""),
+             "Codex loaded a different model list than the catalog"),
+            (subprocess.CompletedProcess([], 0, "not json", ""), "codex debug models returned unreadable output"),
+            (subprocess.CompletedProcess([], 0, json.dumps({"models": [{"slug": "b"}, {"slug": "a"}]}), ""), None),
+        ]
+        for completed, expected in cases:
+            with self.subTest(expected=expected), patch.object(bridge.subprocess, "run", return_value=completed) as run:
+                self.assertEqual(bridge.codex_rejects_catalog("codex", catalog, ["a", "b"]), expected)
+                command = run.call_args.args[0]
+                self.assertEqual(command[:3], ["codex", "debug", "models"])
+                self.assertEqual(command[-1], "model_catalog_json=" + json.dumps(str(catalog)))
+
+    def test_only_this_bridges_route_is_synced(self):
+        for config, error in [
+            ('model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:4202/v1"\n', "another gateway"),
+            ('model_provider = "other"\n[model_providers.other]\nbase_url = "http://127.0.0.1:2/v1"\n'
+             '[model_providers.cli_proxy]\nbase_url = "http://127.0.0.1:1/v1"\n', "neither the transparent proxy"),
+        ]:
+            with self.subTest(error=error):
+                self.config.write_text(config)
+                result = self.sync("--catalog", str(self.catalog), "--apply", expected=2)
+                self.assertIn(error, result["error"])
+                self.assertEqual(self.requests, [])
+                self.assertFalse(self.catalog.exists())
+        self.write_config()
+        self.config.write_text(self.config.read_text().replace("8318", "9318"))
+        self.assertEqual(self.sync("--transparent-url", "http://127.0.0.1:9318/v1", "--apply")["status"], "applied")
+
+    def test_relative_catalog_is_resolved_next_to_the_config(self):
+        self.config.write_text('model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:8318/v1"\n'
+                               'model_catalog_json = "relative.json"\n')
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        result = self.sync("--apply", cwd=elsewhere)
+        self.assertEqual(result["catalog"], str(self.root / "relative.json"))
+        self.assertTrue((self.root / "relative.json").exists())
+        self.assertFalse((elsewhere / "relative.json").exists())
+
+    def test_profile_and_agent_role_models_are_never_removed(self):
+        (self.root / "worker.toml").write_text('model = "gpt-6-sol"\n')
+        self.write_config('model = "gpt-6-astra"\n[profiles.quick]\nmodel = "gpt-image-2"\n'
+                          '[agents.worker]\ndescription = "w"\nconfig_file = "worker.toml"\n')
+        self.sync("--apply")
+        for retired in ["gpt-6-sol", "gpt-image-2"]:
+            with self.subTest(retired=retired):
+                kept = [item for item in self.upstream]
+                self.upstream[:] = [item for item in kept if item["slug"] != retired]
+                result = self.sync("--apply", expected=2)
+                self.assertEqual(result["missing_configured_models"], [retired])
+                self.assertIn(retired, self.entries())
+                self.upstream[:] = kept
+        (self.root / "worker.toml").write_text("model = [")
+        self.assertIn("config_file is unreadable", self.sync("--apply", expected=2)["error"])
+
+    def test_corrupt_catalog_is_rebuilt_without_replacing_the_good_backup(self):
+        previous = self.catalog.with_name("catalog.json.previous")
+        previous.write_text('{"models": []}')
+        self.catalog.write_text("{broken")
+        result = self.sync("--apply")
+        self.assertEqual(result["status"], "applied")
+        self.assertIn("JSONDecodeError", result["existing_catalog_invalid"])
+        self.assertIsNone(result["backup"])
+        self.assertEqual(previous.read_text(), '{"models": []}')
+        self.assertEqual(list(self.entries()), ["gpt-6-astra", "gpt-6-sol", "gpt-image-2"])
+
+    def test_duplicate_extra_slugs_block_and_shadowed_manifests_are_not_validated(self):
+        models_d = self.state / "models.d"
+        models_d.mkdir()
+        (models_d / "a.json").write_text(json.dumps({**sample_manifest(), "slug": "kimi-k3"}))
+        (models_d / "old.json").write_text(json.dumps({"slug": "gpt-6-sol", "supersedes": ["gpt-5"]}))
+        result = self.sync("--apply")
+        self.assertEqual(result["manifests_shadowed_by_live_list"], ["gpt-6-sol"])
+        (models_d / "b.json").write_text(json.dumps({**sample_manifest(), "slug": "kimi-k3"}))
+        before = self.catalog.read_bytes()
+        result = self.sync("--apply", expected=2)
+        self.assertIn("also declared in", json.dumps(result["manifest_errors"]))
+        self.assertEqual(self.catalog.read_bytes(), before)
+        (models_d / "b.json").write_text(json.dumps({**sample_manifest(), "slug": "x", "input_modalities": [["text"]]}))
+        self.assertIn("input_modalities", json.dumps(self.sync("--apply", expected=2)["manifest_errors"]))
+
+    def test_priority_zero_bracket_ids_and_output_order(self):
+        self.upstream.append(entry("foo[1m]", priority=7))
+        self.write_overrides({"gpt-image-2": {"priority": 0}, "foo[1m]": {"visibility": "hide"}})
+        result = self.sync("--apply")
+        self.assertEqual(result["overrides_unmatched"], [])
+        self.assertEqual(self.entries()["foo[1m]"]["visibility"], "hide")
+        self.assertEqual(list(self.entries()), ["gpt-image-2", "gpt-6-astra", "gpt-6-sol", "foo[1m]"])
+
+    def test_receipt_drops_credentials_embedded_in_the_proxy_url(self):
+        url = "http://user:fixture-secret@127.0.0.1:8318/v1?token=fixture-secret"
+        self.config.write_text(f'model_provider = "openai"\nopenai_base_url = "{url}"\n'
+                               f'model_catalog_json = {json.dumps(str(self.catalog))}\nmodel = "gpt-6-astra"\n')
+        result = self.sync("--transparent-url", url, "--apply")
+        self.assertEqual(result["source"]["base_url"], "http://127.0.0.1:8318/v1")
+        self.assertNotIn("fixture-secret", json.dumps(result))
 
 
 if __name__ == "__main__":

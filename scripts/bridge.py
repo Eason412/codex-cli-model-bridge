@@ -371,16 +371,66 @@ def codex_client_version(codex: str) -> str | None:
     return match.group(0) if match else None
 
 
-def sync_route(config: dict) -> tuple[str, str, str | None]:
-    """Return (mode, base_url, token). Desktop-transparent mode lets the local proxy add credentials."""
+def redact_url(url: str) -> str:
+    """Drop userinfo, query and fragment before a URL enters a receipt."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    if parts.port:
+        host += f":{parts.port}"
+    return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
+def configured_catalog_path(config_path: Path, value: object) -> Path | None:
+    """Codex resolves a relative model_catalog_json next to the config file, not the working directory."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else config_path.expanduser().parent / path
+
+
+def codex_rejects_catalog(codex: str, path: Path, slugs: list[str]) -> str | None:
+    """Load the catalog with Codex's own parser (offline); return why it failed, or None."""
+    try:
+        proc = subprocess.run(
+            [codex, "debug", "models", "-c", "model_catalog_json=" + json.dumps(str(path))],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"codex debug models failed: {type(exc).__name__}"
+    if proc.returncode != 0:
+        lines = proc.stderr.strip().splitlines()
+        return (lines[-1] if lines else f"codex debug models exited {proc.returncode}")[:300]
+    try:
+        loaded = [entry["slug"] for entry in json.loads(proc.stdout)["models"]]
+    except (ValueError, KeyError, TypeError):
+        return "codex debug models returned unreadable output"
+    if sorted(loaded) != sorted(slugs):
+        return "Codex loaded a different model list than the catalog"
+    return None
+
+
+def sync_route(config: dict, transparent_url: str) -> tuple[str, str, str | None]:
+    """Return (mode, base_url, token) for this bridge's own route; other gateways are never synced."""
+    active = config.get("model_provider", "openai")
     root_base_url = config.get("openai_base_url")
-    if config.get("model_provider", "openai") == "openai" and isinstance(root_base_url, str) and root_base_url:
+    if active == "openai" and isinstance(root_base_url, str) and root_base_url:
+        if root_base_url.rstrip("/") != transparent_url.rstrip("/"):
+            raise SyncBlocked({
+                "error": "openai_base_url is not this bridge's transparent proxy; another gateway owns this catalog "
+                         "(pass --transparent-url if the proxy listens elsewhere)",
+                "route_owned_elsewhere": True,
+            })
         if not is_loopback(root_base_url):
             raise SyncBlocked({"error": "transparent OpenAI base URL is not loopback-only"})
         return "desktop-transparent", root_base_url, None
+    if active != PROVIDER_ID:
+        raise SyncBlocked({
+            "error": f"active Provider {active!r} is neither the transparent proxy nor {PROVIDER_ID}",
+            "route_owned_elsewhere": True,
+        })
     provider = provider_from_config(config)
-    if not provider:
-        raise SyncBlocked({"error": "config has neither a transparent openai_base_url nor a [model_providers.cli_proxy] block"})
     base_url = provider.get("base_url", DEFAULT_PROXY_URL)
     if not isinstance(base_url, str) or not is_loopback(base_url):
         raise SyncBlocked({"error": "active Provider is not loopback-only"})
@@ -390,10 +440,7 @@ def sync_route(config: dict) -> tuple[str, str, str | None]:
     return "isolated-profile", base_url, token
 
 
-OVERRIDE_INT_FIELDS = {
-    "context_window", "max_context_window", "auto_compact_token_limit",
-    "effective_context_window_percent", "priority",
-}
+OVERRIDE_INT_FIELDS = {"context_window", "max_context_window", "auto_compact_token_limit"}
 
 
 def load_overrides(path: Path) -> list[tuple[str, dict]]:
@@ -418,50 +465,69 @@ def load_overrides(path: Path) -> list[tuple[str, dict]]:
                 raise ValueError(f"override {key!r}: visibility must be list or hide")
             if field in OVERRIDE_INT_FIELDS and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
                 raise ValueError(f"override {key!r}: {field} must be a positive integer")
-            if field == "effective_context_window_percent" and value > 100:
-                raise ValueError(f"override {key!r}: effective_context_window_percent must be at most 100")
+            if field == "priority" and (isinstance(value, bool) or not isinstance(value, int)):
+                raise ValueError(f"override {key!r}: priority must be an integer")
+            if field == "effective_context_window_percent" and (
+                isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 100
+            ):
+                raise ValueError(f"override {key!r}: effective_context_window_percent must be 1-100")
     return list(models.items())
 
 
 def apply_overrides(entries: list[dict], overrides: list[tuple[str, dict]]) -> tuple[list[str], list[str]]:
-    """Apply glob keys in file order, then exact IDs; return (unmatched keys, errors)."""
+    """Apply glob keys in file order, then an exact ID; return (unmatched keys, errors)."""
     patterns = [(key, fields) for key, fields in overrides if any(char in key for char in "*?[")]
-    exact = {key: fields for key, fields in overrides if not any(char in key for char in "*?[")}
+    exact = dict(overrides)
     matched: set[str] = set()
     errors: list[str] = []
     for entry in entries:
-        rules = [(key, fields) for key, fields in patterns if fnmatch.fnmatchcase(entry["slug"], key)]
-        if entry["slug"] in exact:
-            rules.append((entry["slug"], exact[entry["slug"]]))
+        slug = entry["slug"]
+        # 精确 ID 优先识别，带方括号的真实 ID 也不会被当成通配符。
+        rules = [(key, fields) for key, fields in patterns if key != slug and fnmatch.fnmatchcase(slug, key)]
+        if slug in exact:
+            rules.append((slug, exact[slug]))
+        touched_reasoning = False
         for key, fields in rules:
             matched.add(key)
+            touched_reasoning |= bool({"default_reasoning_level", "supported_reasoning_levels"} & set(fields))
             for field, value in fields.items():
                 if value is None:
                     entry.pop(field, None)
                 else:
                     entry[field] = copy.deepcopy(value)
-        efforts = [level.get("effort") for level in entry.get("supported_reasoning_levels") or [] if isinstance(level, dict)]
-        if efforts and entry.get("default_reasoning_level") not in efforts:
-            errors.append(f"{entry['slug']}: default_reasoning_level is not one of {efforts}")
+        if touched_reasoning:
+            levels = entry.get("supported_reasoning_levels")
+            efforts = [level.get("effort") for level in levels if isinstance(level, dict)] if isinstance(levels, list) else []
+            if entry.get("default_reasoning_level") not in efforts:
+                errors.append(f"{slug}: default_reasoning_level is not one of {efforts}")
     return [key for key, _ in overrides if key not in matched], errors
 
 
-def extra_manifests(state_dir: Path) -> tuple[list[dict], dict[str, list[str]]]:
-    """models.d 只补充上游列表里没有的模型。"""
-    manifests: list[dict] = []
+def extra_manifests(state_dir: Path, live_ids: set[str]) -> tuple[list[dict], list[str], dict[str, list[str]]]:
+    """models.d 只补充上游列表里没有的模型；同名清单让位给实时列表，不再校验。"""
+    extras: list[dict] = []
+    shadowed: list[str] = []
     errors: dict[str, list[str]] = {}
+    owners: dict[str, Path] = {}
     for path in sorted((state_dir / "models.d").glob("*.json")):
         try:
             data = read_json(path)
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
             errors[str(path)] = [f"{type(exc).__name__}: {exc}"]
             continue
+        slug = data.get("slug") if isinstance(data, dict) else None
+        if isinstance(slug, str) and slug in live_ids:
+            shadowed.append(slug)
+            continue
         problems = validate_manifest(data) if isinstance(data, dict) else ["manifest root must be an object"]
+        if not problems and slug in owners:
+            problems = [f"slug {slug!r} is also declared in {owners[slug]}"]
         if problems:
             errors[str(path)] = problems
         else:
-            manifests.append(data)
-    return manifests, errors
+            owners[slug] = path
+            extras.append(data)
+    return extras, sorted(set(shadowed)), errors
 
 
 def validate_manifest(data: dict) -> list[str]:
@@ -490,7 +556,7 @@ def validate_manifest(data: dict) -> list[str]:
     if not efforts or any(not isinstance(item, str) or item not in allowed_efforts for item in efforts):
         errors.append("reasoning_efforts contains an invalid value")
     modalities = data.get("input_modalities", [])
-    if not modalities or any(item not in {"text", "image"} for item in modalities):
+    if not modalities or any(not isinstance(item, str) or item not in {"text", "image"} for item in modalities):
         errors.append("input_modalities must contain only text/image")
     if data.get("default_reasoning_level") not in efforts:
         errors.append("default_reasoning_level must be in reasoning_efforts")
@@ -1182,8 +1248,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
     provider = provider_from_config(profile)
     base_url = root_base_url if transparent_mode else provider.get("base_url")
     base_url = base_url if isinstance(base_url, str) else None
-    catalog_raw = config.get("model_catalog_json") if transparent_mode else profile.get("model_catalog_json")
-    catalog_path = Path(catalog_raw).expanduser() if isinstance(catalog_raw, str) else None
+    catalog_path = (
+        configured_catalog_path(config_path, config.get("model_catalog_json"))
+        if transparent_mode
+        else configured_catalog_path(profile_path, profile.get("model_catalog_json"))
+    )
     provider_counts, inventory, inventory_error = thread_inventory(state_db)
     history_provider = dominant_provider(provider_counts)
     auth, auth_error = chatgpt_auth_state(Path(args.auth_file).expanduser())
@@ -1250,13 +1319,22 @@ def cmd_audit(args: argparse.Namespace) -> None:
     missing_routes = sorted(model for model in required_routes if discovery_succeeded and model not in live_ids)
     if missing_routes:
         findings.append("visible or default catalog models are missing from the live proxy")
+    catalog_readable = bool(catalog_path and not catalog_error)
+    catalog_codex_error = (
+        codex_rejects_catalog(args.codex, catalog_path, [entry["slug"] for entry in current_entries])
+        if catalog_readable
+        else None
+    )
+    if catalog_codex_error:
+        findings.append("Codex cannot load the model catalog")
     # 目录落后于上游时，Codex 会停在旧的模型参数和指令上；这里用 sync 的同一套规则比对。
     catalog_in_sync = None
     catalog_sync_error = None
-    if catalog_path and not catalog_error and discovery_succeeded:
+    if catalog_readable and discovery_succeeded:
         try:
             plan = plan_catalog(
-                config if transparent_mode else profile, catalog_path, Path(args.state_dir).expanduser(), args.codex,
+                config if transparent_mode else profile, config_path if transparent_mode else profile_path,
+                catalog_path, Path(args.state_dir).expanduser(), args.codex, args.transparent_url,
                 Path(args.upstream_file) if args.upstream_file else None,
                 Path(args.models_file) if args.models_file else None,
             )
@@ -1264,8 +1342,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
             if not catalog_in_sync:
                 findings.append("model catalog differs from the live list; run sync")
         except SyncBlocked as blocked:
-            catalog_sync_error = blocked.payload.get("error") or "sync is blocked"
-            findings.append("model catalog cannot be regenerated from the live list")
+            # Router 等其他网关拥有的目录不归本工具同步，不算问题。
+            if not blocked.payload.get("route_owned_elsewhere"):
+                catalog_sync_error = blocked.payload.get("error") or "sync is blocked"
+                findings.append("model catalog cannot be regenerated from the live list")
     codex_version = None
     try:
         codex_version = subprocess.run(
@@ -1284,7 +1364,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
                 "model": config.get("model"),
                 "model_provider": default_provider,
                 "bridge_mode": "desktop-transparent" if transparent_mode else "isolated-profile",
-                "openai_base_url": root_base_url if transparent_mode else None,
+                "openai_base_url": redact_url(root_base_url) if transparent_mode else None,
                 "service_tier": config.get("service_tier"),
             },
             "auth": auth,
@@ -1304,7 +1384,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             },
             "provider": {
                 "id": "openai" if transparent_mode else PROVIDER_ID,
-                "base_url": base_url,
+                "base_url": redact_url(base_url) if base_url else None,
                 "loopback_only": bool(base_url and is_loopback(base_url)),
                 "wire_api": "responses" if transparent_mode else provider.get("wire_api", "responses") if provider else None,
                 "command_auth": False if transparent_mode else isinstance(provider.get("auth"), dict) if provider else False,
@@ -1317,6 +1397,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
                 "path": str(catalog_path) if catalog_path else None,
                 "mode": mode(catalog_path) if catalog_path else None,
                 "model_count": len(catalog_ids),
+                "codex_load_error": catalog_codex_error,
                 "in_sync_with_live_list": catalog_in_sync,
                 "sync_error": catalog_sync_error,
                 "missing_live_routes": missing_routes,
@@ -1450,11 +1531,25 @@ LEGACY_STATE_FILES = {
 }
 
 
-def required_catalog_models(config: dict) -> list[str]:
-    """Models the active config names; sync never writes a catalog that drops them."""
+def configured_models(config: dict, config_path: Path) -> tuple[list[str], list[str]]:
+    """Return (required, protected). Required models must be in the catalog; protected ones are never removed."""
     agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
-    names = [config.get("model"), config.get("review_model"), agents.get("default_subagent_model")]
-    return sorted({name for name in names if isinstance(name, str) and name})
+    required = {config.get("model"), config.get("review_model"), agents.get("default_subagent_model")}
+    protected: set[object] = set()
+    profiles = config.get("profiles") if isinstance(config.get("profiles"), dict) else {}
+    for profile in profiles.values():
+        if isinstance(profile, dict):
+            protected.add(profile.get("model"))
+    for name, role in agents.items():
+        if not isinstance(role, dict) or not isinstance(role.get("config_file"), str) or not role["config_file"].strip():
+            continue
+        role_path = configured_catalog_path(config_path, role["config_file"])
+        role_config, error = load_config(role_path)
+        if error:
+            raise SyncBlocked({"error": f"agent role {name!r} config_file is unreadable: {error}"})
+        protected.add(role_config.get("model"))
+    keep = lambda names: sorted(name for name in names if isinstance(name, str) and name)
+    return keep(required), keep(protected - required)
 
 
 def catalog_changes(current: list[dict], final: list[dict]) -> dict:
@@ -1475,10 +1570,16 @@ def catalog_changes(current: list[dict], final: list[dict]) -> dict:
     }
 
 
-def plan_catalog(config: dict, catalog_path: Path, state_dir: Path, codex: str,
+def catalog_order(entry: dict) -> tuple[float, str]:
+    priority = entry.get("priority")
+    return (priority if isinstance(priority, int) and not isinstance(priority, bool) else float("inf"), entry["slug"])
+
+
+def plan_catalog(config: dict, config_path: Path, catalog_path: Path, state_dir: Path, codex: str,
+                 transparent_url: str = DEFAULT_TRANSPARENT_PROXY_URL,
                  upstream_file: Path | None = None, models_file: Path | None = None) -> dict:
     """Build the catalog from the live Codex-format list, personal overrides and extra manifests."""
-    mode_name, base_url, token = sync_route(config)
+    mode_name, base_url, token = sync_route(config, transparent_url)
     client_version = codex_client_version(codex)
     if not client_version and not upstream_file:
         raise SyncBlocked({"error": "cannot read the installed Codex version; the live list depends on it"})
@@ -1499,14 +1600,12 @@ def plan_catalog(config: dict, catalog_path: Path, state_dir: Path, codex: str,
     overrides_path = state_dir / "overrides.json"
     try:
         overrides = load_overrides(overrides_path)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         raise SyncBlocked({"error": f"overrides are invalid: {exc}", "overrides": str(overrides_path)})
-    manifests, manifest_errors = extra_manifests(state_dir)
+    upstream_ids = {entry["slug"] for entry in upstream}
+    extras, shadowed, manifest_errors = extra_manifests(state_dir, upstream_ids)
     if manifest_errors:
         raise SyncBlocked({"manifest_errors": manifest_errors})
-    upstream_ids = {entry["slug"] for entry in upstream}
-    shadowed = sorted(item["slug"] for item in manifests if item["slug"] in upstream_ids)
-    extras = [item for item in manifests if item["slug"] not in upstream_ids]
     if extras:
         try:
             live_ids = live_model_ids(base_url, token, models_file)
@@ -1521,23 +1620,34 @@ def plan_catalog(config: dict, catalog_path: Path, state_dir: Path, codex: str,
     unmatched, override_errors = apply_overrides(final, overrides)
     if override_errors:
         raise SyncBlocked({"error": "overrides produce invalid entries", "override_errors": override_errors})
-    final_ids = {entry["slug"] for entry in final}
-    dropped = [name for name in required_catalog_models(config) if name not in final_ids]
-    if dropped:
-        raise SyncBlocked({"error": "the live list no longer has a model the config uses", "missing_configured_models": dropped})
+    final.sort(key=catalog_order)
+    existing_error = None
     try:
         current = catalog_models(catalog_path) if catalog_path.exists() else []
     except (OSError, ValueError) as exc:
-        raise SyncBlocked({"error": f"existing catalog is invalid: {exc}", "catalog": str(catalog_path)})
+        # 目录完全由本工具生成；损坏时直接重建，不让每日同步永久卡住。
+        current, existing_error = [], f"{type(exc).__name__}: {exc}"
+    final_ids = {entry["slug"] for entry in final}
+    current_ids = {entry["slug"] for entry in current}
+    required, protected = configured_models(config, config_path)
+    missing_required = [name for name in required if name not in final_ids]
+    removed_protected = [name for name in protected if name in current_ids and name not in final_ids]
+    if missing_required or removed_protected:
+        raise SyncBlocked({
+            "error": "the live list no longer has a model the config uses",
+            "missing_configured_models": sorted(missing_required + removed_protected),
+        })
     legacy = {name: hint for name, hint in LEGACY_STATE_FILES.items() if (state_dir / name).exists()}
     return {
         "final": final,
         "current": current,
+        "current_valid": existing_error is None,
         "receipt": {
             "catalog": str(catalog_path),
-            "source": {"mode": mode_name, "base_url": base_url, "client_version": client_version,
+            "source": {"mode": mode_name, "base_url": redact_url(base_url), "client_version": client_version,
                        "live_model_count": len(upstream)},
             "changes": catalog_changes(current, final),
+            "existing_catalog_invalid": existing_error,
             "overrides": str(overrides_path) if overrides_path.exists() else None,
             "overrides_unmatched": unmatched,
             "extra_models": [item["slug"] for item in extras],
@@ -1549,39 +1659,61 @@ def plan_catalog(config: dict, catalog_path: Path, state_dir: Path, codex: str,
     }
 
 
-def sync_catalog_path(args: argparse.Namespace, config: dict) -> Path:
+def sync_catalog_path(args: argparse.Namespace, config: dict, config_path: Path) -> Path:
     if args.catalog:
         return Path(args.catalog).expanduser()
-    configured = config.get("model_catalog_json")
-    if isinstance(configured, str) and configured.strip():
-        return Path(configured).expanduser()
-    return DEFAULT_CODEX_HOME / "model-catalog-cli-proxy.json"
+    return configured_catalog_path(config_path, config.get("model_catalog_json")) or (
+        DEFAULT_CODEX_HOME / "model-catalog-cli-proxy.json"
+    )
+
+
+def write_checked_catalog(target: Path, models: list[dict], codex: str, keep_previous: bool) -> str | None:
+    """Write only a catalog Codex itself can load; keep one copy of the previous good catalog."""
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, raw = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".candidate", dir=target.parent)
+    candidate = Path(raw)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"models": models}, ensure_ascii=False, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(candidate, 0o600)
+        rejected = codex_rejects_catalog(codex, candidate, [entry["slug"] for entry in models])
+        if rejected:
+            raise SyncBlocked({"error": "Codex cannot load the generated catalog", "codex_error": rejected})
+        previous = None
+        if keep_previous and target.exists():
+            previous = target.with_name(target.name + ".previous")
+            shutil.copy2(target, previous)
+            os.chmod(previous, 0o600)
+        os.replace(candidate, target)
+        return str(previous) if previous else None
+    finally:
+        if candidate.exists():
+            candidate.unlink()
 
 
 def cmd_sync(args: argparse.Namespace) -> None:
-    config, config_error = load_config(Path(args.config).expanduser())
+    config_path = Path(args.config).expanduser()
+    config, config_error = load_config(config_path)
     if config_error:
         emit({"status": "blocked", "error": f"Codex config is invalid: {config_error}"}, 2)
-    target_path = sync_catalog_path(args, config)
+    target_path = sync_catalog_path(args, config, config_path)
     try:
         plan = plan_catalog(
-            config, target_path, Path(args.state_dir).expanduser(), args.codex,
+            config, config_path, target_path, Path(args.state_dir).expanduser(), args.codex, args.transparent_url,
             Path(args.upstream_file) if args.upstream_file else None,
             Path(args.models_file) if args.models_file else None,
         )
+        result = {"status": "planned" if not args.apply else "unchanged", **plan["receipt"], "backup": None}
+        if args.apply and (plan["final"] != plan["current"] or not plan["current_valid"]):
+            # A corrupt current file is not worth keeping as the rollback copy.
+            result["backup"] = write_checked_catalog(target_path, plan["final"], args.codex, plan["current_valid"])
+            result["status"] = "applied"
     except SyncBlocked as blocked:
         emit({**blocked.payload, "secrets_redacted": True}, 2)
-    changed = plan["final"] != plan["current"]
-    result = {"status": "planned" if not args.apply else "unchanged", **plan["receipt"], "backup": None}
-    if args.apply and changed:
-        if target_path.exists():
-            # 一份滚动备份即可回退上一次同步；每日自动运行不再堆积时间戳副本。
-            previous = target_path.with_name(target_path.name + ".previous")
-            shutil.copy2(target_path, previous)
-            os.chmod(previous, 0o600)
-            result["backup"] = str(previous)
-        atomic_write(target_path, json.dumps({"models": plan["final"]}, ensure_ascii=False, indent=2) + "\n", 0o600)
-        result["status"] = "applied"
+    except Exception as exc:  # unattended runs still need a readable receipt
+        emit({"status": "blocked", "error": f"unexpected {type(exc).__name__}", "secrets_redacted": True}, 2)
     emit(result)
 
 
@@ -1618,8 +1750,8 @@ def probe_catalog_path(args: argparse.Namespace) -> Path:
             },
             2,
         )
-    catalog = config.get("model_catalog_json")
-    if not isinstance(catalog, str) or not catalog.strip():
+    catalog = configured_catalog_path(config_path, config.get("model_catalog_json"))
+    if catalog is None:
         emit(
             {
                 "status": "blocked",
@@ -1628,7 +1760,7 @@ def probe_catalog_path(args: argparse.Namespace) -> Path:
             },
             2,
         )
-    return Path(catalog).expanduser()
+    return catalog
 
 
 def cmd_probe(args: argparse.Namespace) -> None:
@@ -1791,6 +1923,7 @@ def parser() -> argparse.ArgumentParser:
     audit.add_argument("--auth-file", default=str(DEFAULT_AUTH_FILE))
     audit.add_argument("--proxy-config", default=str(DEFAULT_PROXY_CONFIG))
     audit.add_argument("--models-file")
+    audit.add_argument("--transparent-url", default=DEFAULT_TRANSPARENT_PROXY_URL)
     audit.add_argument("--upstream-file", help="Tests only: Codex-format live list fixture")
     audit.add_argument("--codex", default="codex")
     audit.add_argument("--proxy-binary", default=str(DEFAULT_PROXY_BINARY))
@@ -1845,6 +1978,7 @@ def parser() -> argparse.ArgumentParser:
     sync.add_argument("--config", default=str(DEFAULT_CODEX_HOME / "config.toml"))
     sync.add_argument("--catalog", help="Defaults to the config's model_catalog_json")
     sync.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
+    sync.add_argument("--transparent-url", default=DEFAULT_TRANSPARENT_PROXY_URL)
     sync.add_argument("--codex", default="codex")
     sync.add_argument("--upstream-file", help="Tests only: Codex-format live list fixture")
     sync.add_argument("--models-file", help="Tests only: OpenAI-format /models fixture")
