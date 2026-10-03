@@ -32,7 +32,7 @@ class StableHelperTests(unittest.TestCase):
                 plist = bridge.launch_agent_source(root / "node", root / "runtime.mjs", helper,
                     "http://127.0.0.1:1/v1", "http://127.0.0.1:2/v1")
             command = tomllib.loads(profile.read_text())["model_providers"]["cli_proxy"]["auth"]["command"]
-            self.assertEqual(command, str(stable.resolve()))
+            self.assertEqual(command, str(stable.absolute()))
             self.assertEqual(plistlib.loads(plist.encode())["EnvironmentVariables"]["CODEX_BRIDGE_HELPER_CMD"], command)
             self.assertNotIn(ephemeral, profile.read_text())
             self.assertNotIn(ephemeral, plist)
@@ -59,7 +59,7 @@ class StableHelperTests(unittest.TestCase):
                     self.assertNotEqual(command, str(candidate))
                     self.assertEqual(arguments, [str(root / "helper.py")])
 
-    def test_host_symlink_is_resolved_and_absent_host_uses_fallback(self):
+    def test_host_symlink_entry_is_preserved_and_absent_host_uses_fallback(self):
         bridge = load_bridge("stable_helper_fallback")
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -69,7 +69,7 @@ class StableHelperTests(unittest.TestCase):
             link = root / "python3"
             link.symlink_to(target)
             with patch.object(bridge.shutil, "which", return_value=str(link)):
-                self.assertEqual(bridge.python_executable(), str(target.resolve()))
+                self.assertEqual(bridge.python_executable(), str(link.absolute()))
             with patch.object(bridge.shutil, "which", return_value=None), patch.object(Path, "exists", return_value=True):
                 self.assertEqual(bridge.python_executable(), "/usr/bin/python3")
             with patch.object(bridge.shutil, "which", return_value=None), patch.object(Path, "exists", return_value=False):

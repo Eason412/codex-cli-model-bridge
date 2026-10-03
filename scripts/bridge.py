@@ -80,7 +80,9 @@ def python_executable() -> str:
             if any(location.is_relative_to(Path(root).absolute()) for root in virtual_roots if root):
                 temporary = True
         if not temporary:
-            return str(resolved)
+            # Keep the stable PATH alias (e.g. Homebrew bin/python3), not its
+            # versioned Cellar target, while checking both for virtual envs.
+            return str(path)
     return "/usr/bin/python3" if Path("/usr/bin/python3").exists() else "python3"
 
 
