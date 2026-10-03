@@ -2,7 +2,7 @@
 
 面向 CLIProxyAPI（CPA）的 Codex 模型接入与配置维护 Skill，支持 Coding Plan／订阅模型接入、Provider 检查、模型目录同步、本地透明代理和调用验证。
 
-当前版本：[V0.0.3](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.3) · [更新日志](changelogs/V0.0.3.md)
+当前开发版本：V0.0.4（未发布） · [更新日志](changelogs/V0.0.4.md)；已发布版本：[V0.0.3](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.3)。
 
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
@@ -44,7 +44,7 @@ Coding Plan／订阅认证和额度由 CPA 及对应上游处理。具体计划�
 
 ## 环境准备
 
-需要 Python 3.11+、已安装的 Codex CLI，以及已配置上游认证、可在本机访问的 CLIProxyAPI。透明代理模式另需 Node.js。
+需要 uv、Python 3.11+、已安装的 Codex CLI，以及已配置上游认证、可在本机访问的 CLIProxyAPI。透明代理模式另需 Node.js。uv 的安装见 [官方文档](https://docs.astral.sh/uv/getting-started/installation/)。
 
 Python 主脚本使用标准库；仓库不包含 CPA 服务或上游账号配置。CPA 的安装与模型接入见 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)。
 
@@ -60,7 +60,7 @@ Python 主脚本使用标准库；仓库不包含 CPA 服务或上游账号配�
 
    Windows 可下载 [官方发行版](https://github.com/router-for-me/CLIProxyAPI/releases)；Linux 安装器、AUR 和其他安装方式见 [CPA 官方快速开始](https://help.router-for.me/cn/introduction/quick-start)。
 
-2. **配置本机访问与上游账号。** 按 [基础配置](https://help.router-for.me/cn/configuration/basic) 设置 `host: "127.0.0.1"`、`port: 8317`，保持远程管理关闭，并在 `api-keys` 中设置自己的客户端访问密钥。Homebrew 服务默认读取 `$(brew --prefix)/etc/cliproxyapi.conf`。再按 CPA 文档中对应提供商的说明完成 Coding Plan／订阅认证；插件路由还需安装相应插件。
+2. **配置本机访问与上游账号。** 按 [基础配置](https://help.router-for.me/cn/configuration/basic) 设置 `host: "127.0.0.1"`、`port: 8317`，保持远程管理关闭，并在 `api-keys` 中设置自己的客户端访问密钥。另行开放 CPA 局域网访问时必须保留客户端 Key；透明桥仍只监听 loopback，不向局域网开放。Homebrew 服务默认读取 `$(brew --prefix)/etc/cliproxyapi.conf`。再按 CPA 文档中对应提供商的说明完成 Coding Plan／订阅认证；插件路由还需安装相应插件。
 
 3. **启动服务。** macOS 配置完成后执行：
 
@@ -77,10 +77,10 @@ Python 主脚本使用标准库；仓库不包含 CPA 服务或上游账号配�
 ```sh
 git clone https://github.com/Eason412/codex-cli-model-bridge.git
 cd codex-cli-model-bridge
-python3 scripts/bridge.py --help
+uv run <skill-dir>/scripts/bridge.py --help
 ```
 
-Windows 可将 `python3` 替换为 `py -3`。命令成功后会显示可用子命令。
+将 `<skill-dir>` 替换为本仓库的绝对目录；路径含空格时加引号。所有 bridge 命令都使用此入口，不依赖当前工作目录。Windows 同样使用 uv，见 [Windows 配置](references/windows.md)。命令成功后会显示可用子命令。
 
 在 Codex 中引用本仓库的 [SKILL.md](SKILL.md)，例如：
 
@@ -111,40 +111,20 @@ Codex 支持符号链接形式的 Skill 目录，见 [官方说明](https://lear
 | `~/.config/codex-cli-model-bridge/enabled-manifests.json` | 本机启用的内置清单，存在时全量同步只处理列出的模型 |
 | Codex / CPA 各自的配置与认证目录 | 登录、密钥及运行配置 |
 
-个人策略使用完整 JSON，包含 `protected_native_model_ids` 和 `hidden_native_model_ids`。临时指定另一份策略可用 `sync --catalog-policy <path>`，该参数优先级最高。
+个人策略使用完整 JSON，包含 `protected_native_model_ids` 和 `hidden_native_model_ids`。临时指定另一份策略可用 `sync --catalog-policy <path>`，该参数优先级最高。`--state-dir <path>` 将状态、个人策略、`models.d/` 和启用清单一起移到指定目录。
 
 ## 常用命令
 
-以下命令在本仓库根目录执行。
+以下命令中的 `<skill-dir>` 均指本 Skill 的绝对目录。
 
 ### GPT Fast 模式
 
-Fast 默认关闭，按需显式启用。安装与模型目录同步只提供 Fast 能力声明，不自动开启加速，也不覆盖已有的 Codex 速度设置。
-
-Fast 沿用原模型 ID，通过服务档位启用。目录同步保留 GPT-6 Astra、GPT-5.6 Sol、Terra、Luna 等同名原生模型的 Fast 元数据，不按 GPT 前缀批量赋予能力，也不生成重复的 `*-fast` 模型。
-
-Codex CLI 中的模式切换与状态检查：
-
-```text
-/fast on
-/fast off
-/fast status
-```
-
-单次 Fast 调用验证：
-
-```sh
-python3 scripts/bridge.py probe --desktop --models gpt-6-astra --fast
-```
-
-探测仅对当前子进程启用 Fast，不修改全局配置。Fast 会增加对应上游的额度消耗或费用；模型、账号与区域支持以实际服务为准。目录同步、持久配置及实际响应档位的区别见 [Fast 配置与验证](references/fast-mode.md)；功能说明见 [OpenAI 官方文档](https://learn.chatgpt.com/zh-Hans/docs/agent-configuration/speed)。
-
-Sol、Terra、Luna 分别使用 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`；`--models` 支持逗号分隔的多个 ID。ChatGPT 订阅桥接中的响应档位回显不等同于公开 API 的计费档位判断，不以 `default` 回显单独判定 Fast 失效。
+Fast 使用原模型的服务档位，默认不启用；目录继承、模式设置、单次探测与响应档位解释统一见 [Fast 配置与验证](references/fast-mode.md)。
 
 ### 配置检查
 
 ```sh
-python3 scripts/bridge.py audit
+uv run <skill-dir>/scripts/bridge.py audit
 ```
 
 输出配置、目录和连接检查结果。代理配置未被自动发现时，使用 `--proxy-config` 指定实际路径；完整选项见各子命令的 `--help`。
@@ -152,29 +132,29 @@ python3 scripts/bridge.py audit
 ### 独立配置与目录同步预览
 
 ```sh
-python3 scripts/bridge.py configure
-python3 scripts/bridge.py sync
+uv run <skill-dir>/scripts/bridge.py configure
+uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml
 ```
 
-确认预览结果后，分别添加 `--apply` 应用。`configure` 生成独立配置，`sync` 写入模型目录。具体流程见 [Skill 操作说明](SKILL.md)。
+`<codex-home>` 默认是 `~/.codex`，设置 `CODEX_HOME` 时使用该目录。确认预览后分别添加 `--apply`。`configure` 生成独立配置，`sync` 写入模型目录。同步的在线认证仍读取 `[model_providers.cli_proxy]` 的命令式认证，不直接使用透明桥根配置的 ChatGPT 登录；根配置未声明该 Provider 时，必须传入已配置的隔离配置。透明桥使用另一份目录时，再加 `--catalog <active-catalog-path>` 指向根配置中的 `model_catalog_json`，不要跳过在线路由检查。具体流程见 [Skill 操作说明](SKILL.md)。
 
 ### 桌面透明代理配置预览
 
 ```sh
-python3 scripts/bridge.py configure-desktop
+uv run <skill-dir>/scripts/bridge.py configure-desktop
 ```
 
-该模式会调整 Codex 根配置并启动本地代理。应用时需要预览返回的 `--expected-sha256`，步骤见 [桌面桥接流程](SKILL.md#5-enable-transparent-desktop-coexistence)。
+该模式调整 Codex 根配置并部署本地代理。发生变更时应用需要预览返回的 `--expected-sha256`；根配置打印差异仅包含顶层受管字段，运行时另报变化标记和前后 SHA，不打印旧副本。配置和运行时均未变且代理健康时不会重写或启动服务，步骤见 [预览与应用](SKILL.md#preview-and-apply)。
 
 ### 模型调用验证
 
 将 `<model-id>` 替换为 CPA 中已配置的模型 ID：
 
 ```sh
-python3 scripts/bridge.py probe --desktop --models "<model-id>"
+uv run <skill-dir>/scripts/bridge.py probe --desktop --models "<model-id>"
 ```
 
-独立配置模式省略 `--desktop`。探测会实际调用模型，消耗对应服务额度；`--shell` 检查真实命令事件，`--tool-sequence` 检查连续工具调用。
+独立配置模式省略 `--desktop`。探测会实际调用模型，消耗对应服务额度；文本响应必须精确匹配预期标记，`--shell` 检查真实命令事件，`--tool-sequence` 检查连续工具调用。
 
 `--catalog` 指定的目录会实际传入 Codex。`--config` 仅接受当前 Codex 根配置路径，其他文件会明确报错；使用已安装的命名配置时，省略 `--desktop` 并传 `--profile <name>`。
 
@@ -183,7 +163,7 @@ python3 scripts/bridge.py probe --desktop --models "<model-id>"
 以下命令通过透明代理发送合成的 V2 任务，要求完成响应中的随机标记与任务正文一致：
 
 ```sh
-python3 scripts/bridge.py probe-multi-agent --models "<model-id>"
+uv run <skill-dir>/scripts/bridge.py probe-multi-agent --models "<model-id>"
 ```
 
 输出中的 `probe_scope` 为 `synthetic_agent_message_delivery`，`native_spawn_tested` 为 `false`。原生 spawn、角色覆盖、实际模型身份及 `fork_turns` 继承范围的验证步骤见 [子代理兼容与维护](references/spawn-compatibility.md)。
@@ -205,8 +185,11 @@ python3 scripts/bridge.py probe-multi-agent --models "<model-id>"
 
 ## 开发检查
 
+本机先按 [贡献指南](CONTRIBUTING.md#验证) 设置临时 HOME、CODEX_HOME 与输出目录，再运行：
+
 ```sh
-python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.11 python -m unittest discover -s tests -v
+node --test tests/test_proxy_version.mjs
 node --check scripts/transparent_proxy.mjs
 ```
 

@@ -5,286 +5,110 @@ description: Configure or troubleshoot Codex custom Providers and proxy model ca
 
 # Codex CLI Model Bridge
 
-Manage subscription-backed or local proxy models in Codex. Codex uses a Responses API Provider plus a model catalog; keep its writer and state separate from other applications that share CLIProxyAPI.
+Maintain Codex configuration and catalogs for CLIProxyAPI (CPA). Codex selects one Provider for a task; catalog entries cannot route individual models to different Providers. Preserve the Provider owning the dominant indexed history, normally `openai`; never rewrite task rows to match a Provider change.
 
-Codex selects one `model_provider` for a task. Model catalog entries do not carry per-model Provider routing. Preserve the Provider identity that owns the majority of indexed task history (normally `openai`). For normal Desktop use, the supported bridge design keeps `model_provider = "openai"`, keeps ChatGPT subscription auth intact, and points the built-in Provider's `openai_base_url` at an owner-only loopback header-rewriting proxy. CLIProxyAPI then routes native GPT subscription models and verified third-party models behind one catalog without changing the task Provider identity. Keep the isolated `$CODEX_HOME/cli-proxy.config.toml` profile as the default path on Windows and as a fallback everywhere else.
+Desktop coexistence keeps `model_provider = "openai"`, ChatGPT login and a loopback `openai_base_url` pointing to the owner-only header proxy. All catalog models use that same Provider and bridge. Do not make `cli_proxy` or vendor `ZAI` the Desktop default when history belongs to `openai`. The isolated `cli-proxy.config.toml` profile is the Windows default and a fallback elsewhere. Custom Providers need the Responses API; Chat Completions alone is insufficient.
 
-This is transparent single-Provider routing, not per-model Provider routing. Never set the Desktop default to `cli_proxy` or vendor `ZAI` when most history belongs to `openai`.
+Resolve this loaded Skill directory as `<skill-dir>` and use `uv run <skill-dir>/scripts/bridge.py`. Require uv, Python 3.11+, Codex CLI and authenticated CPA routes; Desktop-transparent mode also needs Node.js.
 
-When the user wants GLM-5.3 from a Coding Plan key, read [glm-coding-plan.md](references/glm-coding-plan.md). If Desktop already uses Codex Router on port 4202, add `zai-coding` there and keep the OpenAI Provider identity. Do not run `npx @z_ai/coding-helper`.
+## Audit and mode selection
 
-On Windows, start with the isolated profile. Read [windows.md](references/windows.md). Do not require Homebrew, LaunchAgents, or Codex Router.
+Start with `uv run <skill-dir>/scripts/bridge.py audit`. Inspect redacted TOML validity and permissions, Provider/history counts and integrity digest, ChatGPT or command-backed auth, active catalog, live `/v1/models`, missing routes and bridge ownership. Versions identify the installation, not proof of compatibility. Pass `--proxy-config` and the verified listener's `--proxy-binary` when discovery identifies another installation.
 
-## Resolve the Skill directory
+| Active path | Action |
+| --- | --- |
+| Router on `127.0.0.1:4202` | Preserve Router ownership; do not replace its catalog with the CPA bridge. |
+| Desktop-transparent bridge on `127.0.0.1:8318` | Preserve `openai`, ChatGPT login and history; repair the smallest failing layer. |
+| Isolated profile / Windows | Configure and sync the separate profile; leave root Provider unchanged. |
+| Root Provider differs from dominant history | Offer explicit history repair before model work; restore is not a routine installation step. |
 
-Resolve this loaded Skill's directory as `<skill-dir>`. Resolve `<python>` as the first available of `python3`, `py -3`, and `python`. Use the deterministic entry point:
+Fast settings and validation: [fast-mode.md](references/fast-mode.md).
+Spawn transport, model identity and maintenance: [spawn-compatibility.md](references/spawn-compatibility.md).
+GLM Coding Plan and existing Router ownership: [glm-coding-plan.md](references/glm-coding-plan.md).
+Windows installation and equivalent uv commands: [windows.md](references/windows.md).
 
-```bash
-<python> <skill-dir>/scripts/bridge.py
+## Commands
+
+All writes preview without `--apply`; use verified live route IDs for `<model-id>`. Preserve the default model unless explicitly requested.
+
+| Command after `uv run <skill-dir>/scripts/bridge.py` | Purpose |
+| --- | --- |
+| `audit` | Read-only configuration, history, route and catalog checks. |
+| `configure` | Isolated profile and owner-only credential helper; preserves unrelated profile sections and root config. |
+| `sync` | Catalog preview; apply after reviewing the whole diff and live routes. |
+| `configure-desktop` | Root Provider/catalog and transparent-runtime preview. |
+| `configure-multi-agent` | Preview CPA's `codex.optimize-multi-agent-v2` flag; never restarts CPA. |
+| `restore-default` | Explicit history repair: restore dominant Provider/native model and remove root catalog/base-URL overrides. |
+| `probe --models <model-id>` | Ephemeral, read-only `codex exec` using the isolated profile. |
+| `probe --desktop --models <model-id>` | Probe root catalog without changing Provider identity. |
+| `probe --desktop --shell --models <model-id>` | Require a real successful `pwd` event. |
+| `probe --desktop --tool-sequence --models <model-id>` | Require ordered successful `pwd` and `git --version` events. |
+| `probe-multi-agent --models <model-id>` | Synthetic `agent_message` delivery; not native spawn acceptance. |
+| `validate-manifest <path>` | Validate metadata without installing a route. |
+
+The isolated helper reads the existing CPA client key without copying it into Codex config. Python helpers are the default; retain an existing Ruby `.rb` helper. Use `codex --profile cli-proxy` for the installed profile. Sync's live authentication reads command-backed auth under `[model_providers.cli_proxy]`, not the transparent root's ChatGPT login. If root config lacks that Provider, pass the configured isolated file with `--config <codex-home>/cli-proxy.config.toml`. If the Desktop catalog differs, also pass `--catalog <active-catalog-path>` matching root `model_catalog_json`; never skip live checks to bypass missing auth.
+
+## Preview and apply
+
+Changed root writes (`configure-desktop`, `restore-default`) and CPA multi-agent writes require a preview and its current `config_sha256`:
+
+```sh
+uv run <skill-dir>/scripts/bridge.py configure-desktop
+uv run <skill-dir>/scripts/bridge.py configure-desktop \
+  --expected-sha256 <approved-sha256> --apply
 ```
 
-Examples below use `python3`. Substitute `<python>` when that command is missing.
+Use the same protocol for `restore-default` and `configure-multi-agent`. Approval covers the finding and diff; rerun preview if the hash changes. Root printable diffs show only managed top-level `model`, `model_provider`, `model_catalog_json` and `openai_base_url`, not unrelated configuration. Mutations preserve unrelated TOML and create owner-only backups. History repair refuses a minority Provider unless `--allow-minority-provider` is explicit; when the existing model is not native, its fallback uses the smallest native `priority` with a stable slug tie-break.
 
-## Default workflow
+Isolated configuration and catalog sync use their normal preview then `--apply`:
 
-### 1. Audit before mutation
-
-```bash
-python3 <skill-dir>/scripts/bridge.py audit
+```sh
+uv run <skill-dir>/scripts/bridge.py configure
+uv run <skill-dir>/scripts/bridge.py configure --apply
+uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml
+uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml --apply
 ```
 
-The audit must redact secrets and verify:
+Desktop configuration requires dominant OpenAI history, healthy ChatGPT auth, distinct loopback endpoints, a valid catalog/default model, Node and the helper. Its default listener is `127.0.0.1:8318`, forwarding to authenticated CPA on `127.0.0.1:8317`; it replaces Authorization and lifts missing or old `Version` headers without changing the request body. The version floor is the newer of installed Codex and `CODEX_BRIDGE_MIN_CLIENT_VERSION` (default `0.160.0`); already-newer headers remain unchanged. `CODEX_BRIDGE_CODEX_BIN` selects the CLI used for version detection, otherwise `/opt/homebrew/bin/codex` is used if present, falling back to PATH's `codex` only when that file is absent.
 
-- Codex CLI version, `~/.codex/config.toml`, file permissions, and TOML validity
-- default `model_provider`, indexed task counts by Provider, SQLite integrity, and the dominant history Provider
-- active bridge mode: Desktop-transparent or isolated-profile
-- Desktop-transparent `openai_base_url`, ChatGPT auth continuity, loopback health, or the isolated profile's command-backed authentication
-- loopback-only CLIProxyAPI reachability and live `/v1/models`
-- the active catalog's validity, visible model IDs, and bridge ownership state
-- stale catalog entries, missing live routes for managed models, listed native models, or the current default model, and models present in the proxy but absent from Codex
+It installs the runtime under the default bridge state path and, on macOS, a LaunchAgent labeled `com.zhijian.codex-cli-model-bridge-transparent-proxy`; Windows/Linux use detached Node. Review runtime change flags and before/after hashes as well as config before deployment; old runtime source is not printed because it may contain private data. Unchanged config/runtime with a healthy listener returns `unchanged` without writing or starting a process; a runtime difference still needs deployment even when root TOML is unchanged. Any supplied stale config hash is rejected, including on an otherwise unchanged request.
 
-Codex officially supports only the Responses wire API for custom Providers. Do not register a Chat Completions-only route and call it Codex-compatible.
+CPA config writes and service changes are separate. Identify the listener executable and actual service manager, preserve patches and obtain restart approval before switching that owner. Homebrew installation does not prove ownership. Never run a second CPA against the same OAuth directory.
 
-If the default Provider differs from the dominant indexed-history Provider, treat history restoration as the first repair. Do not edit task rows to make the current Provider fit.
+## Catalog synchronization
 
-### 2. Restore the desktop default and history
+Full sync refreshes native metadata from read-only `models_cache.json` and overlays selected manifests. Metadata never selects a Provider. If a native template is missing, the entry with the smallest `priority` is used with a stable slug tie-break; the receipt reports `template_fallbacks` for review. Speed capabilities are not inferred from that fallback.
 
-Preview:
+Default state is `~/.config/codex-cli-model-bridge`; `--state-dir` relocates state, personal `models.d`, `enabled-manifests.json` and policy lookup together. Policy precedence is explicit `--catalog-policy`, personal `catalog-policy.json`, then `<skill-dir>/policies/catalog.json`. Policies are complete files, not overlays. Retain exact slugs in `protected_native_model_ids`; manifests cannot `supersede` them. Hidden native IDs remain with `visibility = "hide"`, preserving tasks and routes.
 
-```bash
-python3 <skill-dir>/scripts/bridge.py restore-default
-```
+Full sync uses bundled manifests enabled by `{"schema_version": 1, "enabled": ["<model-id>"]}` when that file exists, plus personal manifests. Invalid, duplicate or unknown enabled IDs block sync. Explicit `--models <comma-separated-ids>` selects available manifests without consulting the enabled file; unselected entries and order remain intact except explicit supersedes removals. Subset sync does not refresh other native metadata or reapply its visibility policy, and cannot combine with `--prune-managed`.
 
-The preview reports one finding ID, the current config SHA-256, the exact single-file diff, and the before-state thread inventory. Apply only after the repair is authorized and the SHA is still current:
+Preserve manual entries and report collisions; `--adopt` needs authorization for the exact slug. Previously managed entries with missing manifests remain unless explicitly pruned. Full `--prune-managed` removes stale custom entries but restores native counterparts under the visibility policy. Review entire `changes`, `field_changes` and `order_changed`, not only selected models; onboarding must not alter unrelated entries. See [model-manifests.md](references/model-manifests.md) for metadata and route evidence.
 
-```bash
-python3 <skill-dir>/scripts/bridge.py restore-default \
-  --expected-sha256 <approved-sha256> \
-  --apply
-```
+## Verification
 
-The default target is the Provider with the largest indexed task count. The command refuses a minority Provider unless `--allow-minority-provider` is explicit, restores a native model, removes the custom root catalog override, preserves unrelated TOML, creates a `0600` backup, and proves the task inventory digest did not change.
+Probe affected models through the active mode. Text probes require the exact expected final marker; shell/sequence probes also require real successful command events, not printed simulations. `--desktop` reads the active root catalog; `--catalog` supplies an explicit one-shot override to Codex. `probe --config` accepts only active `$CODEX_HOME/config.toml`; for a named configuration use `--profile <name>` without `--desktop`. Probes do not rewrite config or copy credentials.
 
-### 3. Configure or repair the isolated CLIProxyAPI profile
+Direct HTTP success or a listed ID is not Codex acceptance. Synthetic multi-agent probes report `native_spawn_tested=false`; claim spawn support only after an authorized real child task verifies delivery, tools, result and recorded model/effort. Do not spawn merely because a reference was read. For third-party shell failures caused by inherited `tool_mode = "code_mode_only"`, test `"tool_mode": null` only in the affected manifest; never disable native code mode globally.
 
-This is the default path on Windows. Preview and apply:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py configure
-python3 <skill-dir>/scripts/bridge.py configure --apply
-```
-
-The command does not rewrite `~/.codex/config.toml`. It preserves unrelated profile sections, creates timestamped `0600` backups, installs an owner-only credential helper that reads the existing CLIProxyAPI client key without copying it, and configures `~/.codex/cli-proxy.config.toml` with:
-
-- `model_provider = "cli_proxy"`
-- `model_catalog_json = "~/.codex/model-catalog-cli-proxy.json"`
-- `[model_providers.cli_proxy]` with a loopback URL and `wire_api = "responses"`
-- `[model_providers.cli_proxy.auth]` using the local helper command
-
-The helper is Python by default so Windows does not need Ruby. An existing `.rb` helper is left in place. Do not set or change the user's default model unless they explicitly ask. Do not overwrite built-in Provider IDs. After this profile exists, use `codex --profile cli-proxy`.
-
-### 4. Synchronize the profile model catalog
-
-Preview bundled models:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py sync
-```
-
-Apply after live route verification:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py sync --apply
-```
-
-Full sync refreshes unmanaged native metadata from Codex's cache and generates managed entries from the selected manifests. A previously managed entry whose manifest is missing stays intact unless explicitly pruned. Sync preserves manual profile entries, refuses to overwrite an unowned collision unless `--adopt` is explicit, backs up the target, writes atomically, and records managed IDs under `~/.config/codex-cli-model-bridge/state.json`.
-
-The shared picker policy lives at `<skill-dir>/policies/catalog.json`. Keep personal preferences in `~/.config/codex-cli-model-bridge/catalog-policy.json`, which takes precedence when present; an explicit `--catalog-policy` takes highest priority. These are complete policy files, not partial overlays: retain the protected IDs when creating a personal copy. IDs in `hidden_native_model_ids` remain in the catalog with Codex's native `visibility = "hide"` semantics, so existing tasks and routes keep working while those entries disappear from the model picker. Change the selected policy instead of hand-editing the generated catalog; full sync reapplies it after a Codex update refreshes `models_cache.json`.
-
-IDs in `protected_native_model_ids` must also remain under their exact native slugs. Codex App `create_thread` validates those IDs independently of cosmetic catalog aliases, so a managed manifest must never `supersede` them. Represent Fast through the service tier; do not replace `gpt-5.6-sol` with a `*-standard` picker alias. Audit fails when a listed catalog model or the current default model is missing from that live list.
-
-Native entries copied into the bridge catalog are metadata only. In isolated-profile mode they route through `cli_proxy`; in Desktop-transparent mode they route through the built-in `openai` Provider identity and its loopback `openai_base_url`. The catalog itself never chooses the Provider.
-
-Use `--models <comma-separated-ids>` for a scoped update: existing unselected entries and their order are preserved exactly, except explicit `supersedes` removals. This includes managed entries with native counterparts; do not reset their context windows or priority from the native cache. Subset sync does not refresh unrelated native metadata or reapply their visibility policy; use full sync for those changes. Subset sync and `--prune-managed` cannot be combined.
-
-Bundled manifests are limited to a machine's enabled set when `~/.config/codex-cli-model-bridge/enabled-manifests.json` exists: `{"schema_version": 1, "enabled": ["<model-id>", ...]}`. This keeps full sync working when the repository ships example manifests this machine has no route for. Personal manifests under `models.d/` always participate. Explicit `--models` selects from all manifests without reading the enabled-set file. On full sync, an unknown, duplicated, or malformed enabled entry blocks the sync instead of being skipped silently.
-
-Use `--catalog-policy <path>` only for an explicit alternate policy or an isolated test. Use full-sync `--prune-managed` only when the user explicitly asked to remove stale bridge ownership: stale custom entries are removed; native counterparts revert to native metadata and remain available under the visibility policy. Manual entries remain intact. The receipt compares the entire catalog (`changes`, `field_changes`, `order_changed`), not just selected models. Before applying an onboarding sync, verify that no unrelated model changed; idempotence alone does not prove this invariant.
-
-When onboarding a new model, read [model-manifests.md](references/model-manifests.md). A manifest is metadata, not proof. Its route must appear in live `/v1/models`, and a real `codex exec` probe must pass before success is reported.
-
-### 5. Enable transparent Desktop coexistence
-
-Skip this on Windows unless the user explicitly wants the normal Desktop picker and will keep a Node process running. Isolated profile is enough.
-
-First preview the exact root config diff and history guard:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py configure-desktop
-```
-
-After the finding-level diff is authorized, apply with the reported SHA-256:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py configure-desktop \
-  --expected-sha256 <approved-sha256> \
-  --apply
-```
-
-The command refuses to proceed unless `openai` owns the majority of indexed history, `auth.json` still contains healthy ChatGPT tokens, both endpoints are loopback-only, and the selected default model exists in the catalog. It installs:
-
-- `~/.config/codex-cli-model-bridge/transparent_proxy.mjs`, owner-executable
-- on macOS, `~/Library/LaunchAgents/com.zhijian.codex-cli-model-bridge-transparent-proxy.plist`
-- on Windows and Linux, a detached `node` process instead of a LaunchAgent
-- a listener on `127.0.0.1:8318` that rewrites only the downstream Authorization header before forwarding to authenticated CLIProxyAPI on `127.0.0.1:8317`
-
-It then keeps `model_provider = "openai"`, sets `openai_base_url = "http://127.0.0.1:8318/v1"`, activates the verified catalog, preserves ChatGPT login and unrelated TOML, creates a `0600` backup, and proves the task inventory digest did not change. Do not run a second CLIProxyAPI instance against the same OAuth directory; concurrent token refresh can invalidate credentials.
-
-### 6. Handle Fast mode correctly
-
-Codex Fast mode is a service tier on the same model, not a second model entry. For Fast work, read [fast-mode.md](references/fast-mode.md) and verify the exact model's native metadata. Sync preserves `additional_speed_tiers` and `service_tiers` from the matching native model unless the manifest explicitly overrides them; it never borrows another model's Fast support from `template_slug`.
-
-Use `/fast on`, `/fast off`, or `/fast status` in Codex CLI. For an explicitly requested persistent default, merge these values into the existing TOML without duplicating tables:
-
-```toml
-service_tier = "fast"
-
-[features]
-fast_mode = true
-```
-
-or launch a one-off run with:
-
-```bash
-codex -c 'features.fast_mode=true' -c 'service_tier="fast"'
-```
-
-Codex maps `fast` to the priority request value. Preserve that field through the proxy; do not hardcode Fast for every request or create `*-fast` catalog aliases. Fast increases upstream usage/cost and remains subject to model/account/region availability. Do not change the global default merely to expose Fast support.
-
-`probe --fast` sets both flags only for its child process and refuses models without advertised Fast support. Cover requested native GPT models such as Astra, Sol, Terra and Luna using their exact IDs. A successful CLI probe establishes request completion; `served_service_tier` stays null without raw response evidence. For ChatGPT-authenticated Codex, a response tier of `default` does not establish that Fast was ignored (see the OpenAI clarification in the Fast reference). Verify the outgoing priority request and proxy preservation; treat response-tier interpretation and speed measurement separately from API-key-mode semantics.
-
-### 7. Probe through Codex itself
-
-After catalog sync, probe affected models:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py probe --models grok-4.6,deepseek-v4-pro
-```
-
-The probe runs `codex exec --profile cli-proxy` in ephemeral, read-only mode for each model and verifies a successful final response. Use `--fast` only for a model that advertises Fast. Keep prompts non-sensitive and do not persist sessions.
-
-For the normal Desktop-transparent path, probe without switching Provider identity:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py probe \
-  --desktop \
-  --models grok-4.6,deepseek-v4-pro,deepseek-v4-flash,gpt-5.6-sol
-```
-
-With `--desktop`, the probe reads the active root `model_catalog_json` from
-`~/.codex/config.toml`; use `--catalog` only as an explicit override.
-
-The checked catalog is passed to `codex exec` as a one-shot `model_catalog_json` override. `--config` must identify the active `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`); arbitrary alternate files are rejected because Codex exec does not load them through this option. For an installed named configuration use `--profile <name>` without `--desktop`. The probe never copies credentials or rewrites the active config.
-
-Direct HTTP probes can diagnose the proxy, but they do not prove that Codex consumed the Provider and model catalog. Completion requires the Codex-level probe.
-
-When a model can chat but Codex reports an empty or incompatible Shell payload, require an actual read-only command event:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py probe \
-  --desktop \
-  --shell \
-  --models grok-4.6
-```
-
-This passes only when Codex records a successful `pwd` command execution; a model that merely prints or simulates a path does not pass. If the failing custom model inherited `tool_mode = "code_mode_only"` from an OpenAI template, set `"tool_mode": null` in that model manifest and resync. Do not remove code mode from native OpenAI models globally.
-
-### 7.1 Repair Codex Multi-Agent input for third-party models
-
-For Kimi native Responses returning 400 only on delegated tasks, check the Kimi-specific entry-point gap and optional CPA source patch in [spawn-compatibility.md](references/spawn-compatibility.md#kimi-native-responses-agent-message-400). Do not assume this is an Antigravity text-filter failure or change the model's tool mode without a controlled test.
-
-For spawn failures, context inheritance, unexpected child models, plugin routes, or CPA upgrades, read [spawn-compatibility.md](references/spawn-compatibility.md). Use the actual runtime tool schema; do not treat model examples in tool descriptions as the complete allowlist.
-
-For Antigravity `429 RESOURCE_EXHAUSTED` when a minimal request succeeds but a normal Codex or subagent request fails, follow that reference's content-related 429 diagnosis before assuming exhausted quota. Persistent memory can contribute triggering text even with `fork_turns="none"`; do not disable or rewrite global memory as an automatic repair.
-
-Codex Multi-Agent v2 uses a private Responses input item named `agent_message`. Native OpenAI/Codex routes accept it, while xAI and other third-party Responses endpoints may reject it with HTTP 422 and `ModelInput`. CLIProxyAPI 7.2.125+ contains the compatibility transform; do not duplicate this protocol rewrite in the transparent header proxy.
-
-Preview and enable it in the canonical CLIProxyAPI config:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py configure-multi-agent
-python3 <skill-dir>/scripts/bridge.py configure-multi-agent \
-  --expected-sha256 <approved-sha256> \
-  --apply
-```
-
-This changes only `codex.optimize-multi-agent-v2` to `true` and creates a `0600` backup. Changed writes require the approved SHA-256. The command does not restart services or claim runtime verification. Before any reload/restart, identify the actual listener executable and service manager, preserve local patches, and obtain approval. Homebrew being installed does not establish that it owns the running CPA. The transform is gated to official Codex user agents; plugin executors must also invoke it, not just built-in executors.
-
-Verify the exact failing shape, then run the normal Codex probe:
-
-```bash
-python3 <skill-dir>/scripts/bridge.py probe-multi-agent --models grok-4.6
-python3 <skill-dir>/scripts/bridge.py probe --desktop --tool-sequence --models grok-4.6
-```
-
-`probe-multi-agent` requires a completed assistant response matching a random marker carried only in the synthetic task body. It tests protocol message delivery, not native spawn; its output explicitly marks `native_spawn_tested=false`. Run an authorized real spawn test for affected model/role/context combinations and verify the child result and recorded model identity before claiming spawn compatibility.
-
-Older Grok routes need the tool fixes introduced by CLIProxyAPI 7.2.130, but a version floor is not proof that a plugin executor preserves V2 tasks. Check the actual target build and regression evidence. A plain text completion, HTTP 200, or one successful `pwd` does not qualify a model for Subagent work.
-
-### 8. Verify consumption
-
-Run `audit` again and repeat `sync`; the second sync must be idempotent. Normal Desktop tasks must remain on the dominant history Provider. In Desktop-transparent mode all selected models route through the loopback bridge while task identity remains `openai`; do not describe this as independent per-model Provider selection. Use `codex --profile cli-proxy` for Windows and for fallback diagnosis.
-
-Report:
-
-- Codex and CLIProxyAPI versions and local endpoint
-- default Provider, task counts by Provider, and the verified unchanged task-inventory digest
-- profile Provider and catalog paths, with secrets omitted
-- models added, updated, removed, preserved, or conflicted
-- live route and `codex exec` probe results
-- Fast semantics when requested
-- backup paths, reload action, and rollback command
-
-## Repair workflow
-
-1. Audit and distinguish history-scope mismatch, invalid TOML, proxy-down, helper/auth failure, missing route, invalid profile catalog, stale task, and Provider protocol mismatch.
-2. Restore the dominant history Provider before model work; do not rewrite task rows.
-3. Repair the smallest failing layer; do not reinstall a healthy proxy.
-4. Re-authorize the affected upstream account in CLIProxyAPI only when its authentication is actually absent or rejected.
-5. Re-run profile catalog sync and the affected Codex-level probes.
-6. Verify normal desktop history remains visible under the default Provider.
-
-For HTTP 422 / `ModelInput`, or a child that starts but asks for a task, compare ordinary user-message delivery with V2 `agent_message` delivery. Inspect both the compatibility flag and the selected plugin executor's conversion path; follow [spawn-compatibility.md](references/spawn-compatibility.md). Do not add duplicate protocol translation to the transparent header proxy.
-
-Read [troubleshooting.md](references/troubleshooting.md) for failure classification and rollback.
+Rerun audit and sync after changes; the second sync must be idempotent. See [troubleshooting.md](references/troubleshooting.md) for classification and rollback.
 
 ## Safety boundaries
 
-- Keep CLIProxyAPI on explicit loopback and remote management disabled.
-- Do not restart CLIProxyAPI or the 8318 transparent proxy while the current Desktop session is using a third-party model such as Grok. A restart drops live routes for a few seconds and can abort this session with `unknown provider`. Schedule the restart outside active sessions and obtain the user's approval first.
-- Preserve unrelated `config.toml` sections, MCP servers, hooks, skills, permissions, and project trust settings.
-- Never print API keys, bearer headers, OAuth files, one-time codes, raw credential-helper output, or credential-bearing TOML blocks.
-- Keep `config.toml`, catalog/state files, proxy config, helper, and backups owner-only when they can reveal private infrastructure. Unix mode `0600` is the target; on Windows keep the files in the current user profile and do not share them.
-- Use command-backed auth or the owner-only transparent header rewriter; do not embed `experimental_bearer_token` or duplicate the proxy client key.
-- Treat native `models_cache.json` as upstream input, not a file this Skill owns.
-- Do not directly edit Codex SQLite state or the desktop app bundle to force a model into the picker.
-- Never switch the default Provider without first reading the indexed Provider distribution. Refuse a switch that would hide the majority of history unless the user explicitly accepts that result.
-- Do not advertise per-model Provider routing. Desktop coexistence works only because the built-in `openai` Provider identity transparently routes every selected catalog model through the same loopback bridge.
-- Respect Provider subscription terms, quotas, and account ownership.
+- CPA remote management stays disabled; CPA exposed on LAN must require a client API key. Do not rebind an existing shared CPA listener as part of bridge setup. The transparent header proxy must remain loopback-only; its local CPA upstream does not require changing that server's existing listener.
+- Preserve unrelated config, MCP, hooks, skills, permissions, trust and ChatGPT login. Never print keys, bearer headers, OAuth data, codes, helper output or secret-bearing config blocks.
+- Keep config, catalogs, state, helpers and backups owner-only (`0600` for private Unix files; user-private locations/ACLs on Windows). Use command-backed auth or the header proxy, not embedded `experimental_bearer_token`.
+- Never edit Codex SQLite or app bundles. Do not switch default Provider without history counts and explicit acceptance if dominant history would become hidden.
+- Do not restart an active session's CPA/transparent route. Arrange an approved maintenance window and retain rollback paths. Respect upstream account ownership, subscription terms and quotas.
 
 ## Completion gate
 
-Completion requires:
+Apply checks relevant to the requested mode and change:
 
-- default Codex TOML anchored to the dominant indexed-history Provider
-- unchanged, integrity-checked task inventory across the repair
-- valid isolated fallback profile or a healthy Desktop-transparent loopback bridge with ChatGPT auth preserved
-- valid active model catalog with no unapproved collision
-- requested native picker exclusions retained with `visibility = "hide"`
-- every newly managed route visible from CLIProxyAPI
-- a successful ephemeral `codex exec` probe for every affected model through the active mode
-- Fast represented and tested as a service tier when requested
-- a second sync with no changes
-- backups and rollback paths reported
+- Root Provider stays aligned with history; root/history repairs preserve the integrity-checked inventory digest.
+- Selected isolated profile or Desktop bridge is valid and healthy; Desktop retains ChatGPT login.
+- Catalog has no unapproved collision; protected/hidden native entries remain and all managed/listed/default routes are live.
+- Each affected model passes the Codex probe; requested shell, sequence, spawn and Fast checks have their own evidence.
+- Repeated sync makes no changes. Report versions, endpoints, mode/Provider, catalog changes, fallback receipts, probe results, backups and approved reload/rollback.
 
-If Codex cannot complete a Responses request through a route, report it as unverified and do not advertise it as usable merely because `/v1/models` lists the name.
+Unverified routes stay unverified; do not advertise them as usable from `/v1/models` alone.

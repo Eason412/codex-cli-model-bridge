@@ -251,7 +251,7 @@ class BridgeTests(unittest.TestCase):
             )
             catalog.write_text(json.dumps({"models": [{"slug": model}]}), encoding="utf-8")
             fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
+                f"#!{sys.executable}\n"
                 "import pathlib, sys\n"
                 "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
                 "out.write_text('CODEX_BRIDGE_OK', encoding='utf-8')\n",
@@ -289,7 +289,7 @@ class BridgeTests(unittest.TestCase):
             )
             catalog.write_text(json.dumps({"models": [{"slug": model}]}), encoding="utf-8")
             fake_codex.write_text(
-                "#!/usr/bin/env python3\n"
+                f"#!{sys.executable}\n"
                 "import pathlib, sys\n"
                 "out = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])\n"
                 "out.write_text('CODEX_BRIDGE_OK', encoding='utf-8')\n",

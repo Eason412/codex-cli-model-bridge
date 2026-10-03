@@ -7,10 +7,10 @@ Fast 表示同一模型的服务档位。以 `gpt-6-astra` 为例，标准与 Fa
 同步规则：显式模型清单字段优先，其次采用原生缓存中同名模型的字段；无同名原生条目时使用空数组。`template_slug` 仅提供通用兼容字段，不用于推断速度能力。需要恢复被清空的原生 Fast 信息时，刷新原生模型缓存后运行 `sync`，无需创建别名。
 
 ```sh
-python3 scripts/bridge.py sync --models gpt-6-astra
+uv run <skill-dir>/scripts/bridge.py sync --models <model-id>
 ```
 
-上述命令从仓库根目录运行，默认读取 Codex 根配置。若根配置未声明独立 `cli_proxy` Provider，使用已配置的隔离配置文件，例如 `--config "$HOME/.codex/cli-proxy.config.toml"`。核对预览后添加 `--apply`；同步保留个人显示策略，不切换默认模型或速度。
+`<skill-dir>` 是本 Skill 的绝对目录，`<model-id>` 是已核实的同名原生模型 ID。同步在线认证读取 `[model_providers.cli_proxy]` 的命令式认证；根配置没有该 Provider 时，传入已配置的 `--config <codex-home>/cli-proxy.config.toml`，透明桥的 ChatGPT 根登录不能代替它。`<codex-home>` 默认是 `~/.codex`，设置 `CODEX_HOME` 时使用该目录；透明桥的目录路径不同时，另加 `--catalog <active-catalog-path>` 指向根配置的 `model_catalog_json`。不要跳过在线路由检查。核对预览后添加 `--apply`；同步保留个人显示策略，不切换默认模型或速度。
 
 ## 模式设置
 
@@ -30,11 +30,13 @@ Codex 的 Fast 设置映射为请求中的 `priority`。API Key 模式下，可�
 
 ChatGPT 订阅认证采用不同的服务端路由语义。OpenAI 在 Codex 问题回复中明确说明：响应中的 `default` 不代表 Fast 被忽略，`service_tier` 不是该模式下可靠的端到端验证字段。不得将公开 API 的响应判断直接套用于订阅桥接。[OpenAI 回复](https://github.com/openai/codex/issues/14204#issuecomment-4033184620)
 
-8318 透明代理仅替换认证头，保留请求正文；CPA 仍需保留并传递 `service_tier`。不同 CPA 版本对 `fast` 的处理可能不同，验证 Codex 通路时应检查实际发出的 `priority`，不在透明代理中统一强制加速所有模型。CPA 维护者确认 SSE 与 WebSocket 均支持 Priority，不应仅为 Fast 强制更换传输协议。[CPA 回复](https://github.com/router-for-me/CLIProxyAPI/issues/4586#issuecomment-5096157843)
+8318 透明代理替换认证头，并将缺失或过旧的 `Version` 提升至保底版本，不改请求正文；版本来源和覆盖参数见 [透明桥配置](../SKILL.md#preview-and-apply)。CPA 仍需保留并传递 `service_tier`。不同 CPA 版本对 `fast` 的处理可能不同，验证 Codex 通路时应检查实际发出的 `priority`，不在透明代理中统一强制加速所有模型。CPA 维护者确认 SSE 与 WebSocket 均支持 Priority，不应仅为 Fast 强制更换传输协议。[CPA 回复](https://github.com/router-for-me/CLIProxyAPI/issues/4586#issuecomment-5096157843)
 
 ```sh
-python3 scripts/bridge.py probe --desktop --models gpt-6-astra,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna --fast
+uv run <skill-dir>/scripts/bridge.py probe --desktop --models <model-id> --fast
 ```
+
+`--models` 支持逗号分隔的精确 ID；探测只对当前子进程启用 Fast，不修改全局设置，并拒绝未声明 Fast 的模型。Fast 增加上游用量或费用，支持范围由实际模型、账号和区域决定。不要硬编码所有请求的 Fast 档位或生成 `*-fast` 目录别名。
 
 验证分为三层：
 

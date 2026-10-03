@@ -1,53 +1,38 @@
 # Spawn compatibility and CPA maintenance
 
-Use this reference for third-party subagent failures, context inheritance, model identity, and upgrades affecting those paths. Inspect runtime definitions first; the details below describe the V1/V2 behavior observed with Codex 0.153.4, not a permanent schema contract.
+Use this reference for third-party child-task failures, context inheritance, model identity and relevant CPA maintenance. Dispatch parameters come from the actual callable runtime schema; follow the user's `codex-subagents` Skill for delegation policy, model and effort. This reference does not define a second V1/V2 parameter contract.
 
-## Version and inheritance
+## Runtime evidence
 
-| Intent | V1 | V2 |
-| --- | --- | --- |
-| No parent conversation | `fork_context=false` or omission | `fork_turns="none"` |
-| All available parent history | `fork_context=true` | `fork_turns="all"` or omission |
-| Recent N turns | No equivalent parameter | `fork_turns="N"`, positive integer string |
-
-- V2 does not accept V1's `fork_context`. Restored tasks may retain an older multi-agent version; inspect the active schema and recorded version, not just the selected model.
-- The recent-turn window can include the current dispatch turn. `"1"` does not necessarily mean the previous completed turn.
-- `none` excludes parent conversation, not system/project/role instructions or filesystem access. History inheritance is not workspace isolation.
-- Full-history forks inherit parent model and reasoning settings; use a self-contained `none` task for independent cross-model work, subject to the active tool schema.
-- A role can override the requested model. Check the child's recorded model/effort, not its self-description or the request alone.
-- Tool descriptions may abbreviate the model list. In Codex 0.153.4, five displayed examples were not a five-model allowlist. Use the actual callable schema and model catalog.
+- Inspect the active schema and recorded multi-agent version, including restored tasks. Tool-description examples are not a complete model allowlist.
+- Check the child's recorded model/effort and role overrides, not its self-description or requested values alone.
+- Conversation inheritance is not filesystem or memory isolation. Verify inherited content from the actual child request when relevant.
+- A task may require transport compatibility, tool compatibility and native spawn acceptance separately; one success does not prove the others.
 
 ## Message-loss diagnosis
 
-Symptoms include HTTP 422 / `ModelInput`, or a child that starts successfully but returns a generic request for instructions.
+Symptoms include HTTP 422 / `ModelInput`, or a child that starts but asks for instructions.
 
-1. Compare the same bounded task as a normal user message and as V2 `agent_message` input.
+1. Compare the same bounded task as an ordinary user message and as `agent_message` input.
 2. Verify `codex.optimize-multi-agent-v2` and identify the route's built-in or plugin executor.
-3. Inspect whether that executor invokes the V2-aware conversion. Ordinary Responses-to-Chat conversion can omit the task item entirely.
-4. Reuse CPA's existing compatibility transform. Do not implement another transform in the 8318 header proxy.
+3. Inspect whether that executor invokes CPA's compatibility conversion. An ordinary Responses-to-Chat conversion can omit the task item.
+4. Reuse CPA's compatibility transform; do not duplicate it in the 8318 header proxy. Versions alone are not acceptance.
 
-Historical case, 2026-09-07: a WorkBuddy-backed GLM route lost the task in the plugin executor while ordinary chat succeeded. A local fix changed `internal/pluginhost/adapters_executors.go` to reuse `helps.TranslateRequestWithCodexMultiAgentV2` across execution paths. Regression coverage included stream/non-stream delivery, ordering, duplication, compatibility-disabled behavior, and non-Codex callers. Bare upstream v7.2.152 did not contain that fix when inspected. Recheck the target release before applying or retaining a patch; the patch itself is not distributed by this Skill.
-
-## Kimi native Responses agent-message 400
-
-On CPA v7.3.3, Kimi's `executeResponses` and `executeResponsesStream` copy the Responses payload directly, bypassing the existing Codex V2 input conversion. A controlled reproduction succeeded with system/memory context and no delegation item, failed with an `agent_message` alone, and completed after converting only the delegation item to a standard user message while retaining task text. Ordinary high-effort requests and a namespace-tool probe also completed; these observations do not implicate tool mode or account quota.
-
-Related upstream history: [issue #4801](https://github.com/router-for-me/CLIProxyAPI/issues/4801) describes the same third-party Responses dialect gap. Its closed status does not establish coverage of the Kimi executor.
-
-The optional [CPA v7.3.3 patch](../patches/cpa-v7.3.3-kimi-agent-message.patch) adds client/config-gated `RewriteCodexMultiAgentV2Input` calls to both Kimi Responses entry points and executable regression tests. It does not alter native OpenAI/Codex routes or add another transformation to the transparent proxy. `codex.optimize-multi-agent-v2` must be enabled and the caller must satisfy CPA's Codex-client detection.
-
-Apply only in an authorized CPA source checkout after checking its version and existing changes:
+Preview and enable only the canonical CPA config flag:
 
 ```sh
-git apply --check /path/to/skill/patches/cpa-v7.3.3-kimi-agent-message.patch
-git apply /path/to/skill/patches/cpa-v7.3.3-kimi-agent-message.patch
-go test ./internal/runtime/executor -run 'TestKimiResponsesAgentMessageCompatibility|TestKimiExecutorResponses' -count=1
-go build -o /path/to/new-versioned-binary ./cmd/server
+uv run <skill-dir>/scripts/bridge.py configure-multi-agent
+uv run <skill-dir>/scripts/bridge.py configure-multi-agent \
+  --expected-sha256 <approved-sha256> --apply
+uv run <skill-dir>/scripts/bridge.py probe-multi-agent --models <model-id>
+uv run <skill-dir>/scripts/bridge.py probe --desktop --tool-sequence --models <model-id>
 ```
 
-The patch is not automatically installed by `bridge.py`. Review compatibility again on other CPA versions. Preserve local patches and the old binary; service switching needs a maintenance window and a rollback plan. After deployment, verify a real K3 spawn, its runtime model, task delivery, tool execution and final response. Do not report source tests as production acceptance.
+Changed writes require the preview's current SHA-256 and create an owner-only backup. A supplied stale hash is rejected; an unchanged write needs no hash. This command never restarts CPA or claims runtime verification. The conversion is Codex-client/config gated; plugin executors must invoke it too.
 
-Validation at publication: focused executor tests and server build passed; the original-context HTTP normalization control completed. The patched binary has **not** been deployed or accepted through native spawn in this update. The pre-fix native spawn returned 400.
+## Optional legacy Kimi repair
+
+Only an old customized CPA v7.3.3 deployment with the demonstrated Kimi `agent_message` gap should consult [kimi-legacy-compatibility.md](kimi-legacy-compatibility.md). Ordinary onboarding does not require this patch or reference; inspect current behavior before retaining any old source patch.
 
 ## Antigravity content-related 429
 
@@ -77,12 +62,12 @@ Sanitized acceptance, 2026-09-16: on a locally patched CPA v7.3.3 deployment, ad
 
 When authorized to call models and spawn children:
 
-1. Dispatch a bounded arithmetic task to the affected model with `fork_turns="none"`; prohibit tools and further delegation in the child. Verify the exact answer after completion.
+1. Dispatch a bounded arithmetic task using the active schema's no-conversation setting and the user's delegation Skill; prohibit tools and further delegation. Verify the exact answer after completion.
 2. Inspect the child record for actual model, reasoning effort and multi-agent version. A returned child ID alone is insufficient.
-3. Test inheritance using fresh markers in the parent conversation, without repeating their values in the child task. Check `none`, a specified recent-turn window, and full history only where relevant; use the parent model for full-history forks.
+3. Test the requested inheritance mode with fresh markers in the parent conversation without repeating their values in the child task. Use only modes supported by the actual schema and preserve its model/effort constraints.
 4. Record expected versus observed results. These checks validate task transport and inheritance, not general model quality.
 
-The 2026-09-07 local case passed real GLM and Gemini V2 tasks after the CPA patch. Those dated results are not current acceptance for another installation. Never automatically spawn agents merely because this reference was loaded.
+Never automatically spawn agents merely because this reference was loaded.
 
 ## Restart and upgrade handling
 

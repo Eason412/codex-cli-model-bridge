@@ -21,10 +21,13 @@ Bug 修复应提供：
 
 ## 验证
 
-按改动范围执行并记录命令与结果：
+本机测试必须先隔离默认路径：在 `TMPDIR` 或 `/tmp` 下用 `mktemp -d` 建立本次测试目录，给测试子进程设置该目录下的临时 `HOME`、`CODEX_HOME` 和 `UV_CACHE_DIR`，标准输出、错误输出与其他测试产物也放在临时目录中。使用已安装的 uv Python 3.11（可在隔离前用 `uv python find 3.11` 确认，必要时用 `UV_PYTHON_INSTALL_DIR` 保留已有安装目录的发现位置），并设置 `UV_PYTHON_DOWNLOADS=never`。不要让测试读取真实 HOME 下的个人模型策略、凭据或运行状态。测试应使用替身与临时配置，不启动、重启或改变真实 CPA、LaunchAgent 等服务。结束后检查输出并清理本次临时目录，不能把真实 HOME、仓库或宽泛路径作为清理目标。
+
+在上述隔离环境中，按改动范围执行并记录命令与结果：
 
 ```sh
-python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.11 python -m unittest discover -s tests -v
+node --test tests/test_proxy_version.mjs
 node --check scripts/transparent_proxy.mjs
 git diff --check
 ```

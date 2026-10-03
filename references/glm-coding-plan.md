@@ -7,7 +7,7 @@ Do not follow the vendor helper that overwrites `~/.codex/config.toml` with `mod
 ## Detect the Desktop path first
 
 ```bash
-python3 <skill-dir>/scripts/bridge.py audit
+uv run <skill-dir>/scripts/bridge.py audit
 ```
 
 | `openai_base_url` | Path |

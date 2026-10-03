@@ -5,13 +5,13 @@ Isolated profile is the default Windows path. Homebrew, LaunchAgents, and Codex 
 ## What to install
 
 1. Codex CLI for Windows, already logged in if Desktop history should stay on ChatGPT.
-2. Python 3.11 or newer. Prefer `py -3` when `python3` is missing.
+2. uv and Python 3.11 or newer. Use uv for all bridge invocations; no Python interpreter fallback is needed.
 3. Node.js only if the user wants Desktop-transparent mode.
-4. CLIProxyAPI on loopback. Practical sources:
+4. CLIProxyAPI reachable through the local bridge endpoint. Practical sources:
    - [CLIProxyAPI GitHub Releases](https://github.com/router-for-me/CLIProxyAPI/releases)
    - [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) if a tray app is easier
 
-Keep the proxy on `127.0.0.1`. Do not enable remote management.
+Keep remote management disabled. CPA exposed on LAN requires a client API key; the transparent header proxy remains loopback-only. Do not rebind an existing shared CPA listener during bridge setup.
 
 ## Paths
 
@@ -25,22 +25,28 @@ Keep the proxy on `127.0.0.1`. Do not enable remote management.
 
 Unix mode `0600` is not a Windows ACL. Keep these files inside the current user profile and do not share them.
 
+`--state-dir <path>` relocates ownership state, personal `models.d`, `enabled-manifests.json` and personal catalog policy together. Explicit `--catalog-policy` and `--enabled-manifests` still override their corresponding defaults. `CODEX_HOME` controls Codex paths, not bridge state.
+
 ## Default workflow
 
-```text
-<python> <skill-dir>/scripts/bridge.py audit
-<python> <skill-dir>/scripts/bridge.py configure --apply
-<python> <skill-dir>/scripts/bridge.py sync --apply
-<python> <skill-dir>/scripts/bridge.py probe --models grok-4.6,deepseek-v4-pro
+Resolve `<skill-dir>` as the absolute installed Skill/repository directory. PowerShell accepts the same uv entry point; quote paths containing spaces. Preview first, inspect the receipts, then apply:
+
+```powershell
+uv run <skill-dir>/scripts/bridge.py audit
+uv run <skill-dir>/scripts/bridge.py configure
+uv run <skill-dir>/scripts/bridge.py configure --apply
+uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml
+uv run <skill-dir>/scripts/bridge.py sync --config <codex-home>/cli-proxy.config.toml --apply
+uv run <skill-dir>/scripts/bridge.py probe --models <model-id>
 ```
 
-Then start Codex with `codex --profile cli-proxy`. Do not rewrite root `model_provider` to `cli_proxy` when ChatGPT history should stay visible in Desktop.
+Here `<codex-home>` is `$env:CODEX_HOME` when set, otherwise `%USERPROFILE%\.codex`; substitute the actual path, not the literal placeholder. Then start Codex with `codex --profile cli-proxy`. Do not rewrite root `model_provider` to `cli_proxy` when ChatGPT history should stay visible in Desktop.
 
 Pass `--proxy-config` and `--proxy-binary` when PATH discovery misses the Windows install.
 
 ## Optional Desktop-transparent mode
 
-`configure-desktop` starts `node transparent_proxy.mjs` as a detached process instead of a LaunchAgent. The user can also keep a terminal open:
+`configure-desktop` deploys `node transparent_proxy.mjs` as a detached process instead of a LaunchAgent. Changed root writes require preview plus `--expected-sha256 <approved-sha256> --apply`. Unchanged config/runtime and a healthy listener do not trigger another start. The user can also keep a terminal open:
 
 ```text
 node <skill-dir>/scripts/transparent_proxy.mjs
