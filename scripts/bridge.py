@@ -71,7 +71,7 @@ def python_executable() -> str:
         temporary = False
         for location in (path, resolved):
             rendered = location.as_posix().lower()
-            if "/uv/" in rendered and ("environments" in rendered or "archive" in rendered):
+            if "/uv/" in rendered and ("environments" in rendered or "archive" in rendered or "/uv/python/" in rendered):
                 temporary = True
             if any((parent / "pyvenv.cfg").exists() for parent in location.parents):
                 temporary = True

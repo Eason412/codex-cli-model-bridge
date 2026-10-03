@@ -50,6 +50,7 @@ class StableHelperTests(unittest.TestCase):
             (custom / "bin/python3").symlink_to(stable)
             candidates = [root / "cache/uv/environments-v2/fixture/bin/python3",
                           root / "cache/uv/archive-v0/fixture/bin/python3",
+                          root / ".local/share/uv/python/cpython-3.11.15-macos-aarch64-none/bin/python3",
                           root / ".venv/bin/python3", custom / "bin/python3"]
             for candidate in candidates:
                 with self.subTest(candidate=candidate), patch.object(
