@@ -549,6 +549,8 @@ class BridgeTests(unittest.TestCase):
                 str(runtime),
                 "--launch-agent",
                 str(launch_agent),
+                "--transparent-url",
+                "http://127.0.0.1:1/v1",
                 "--node",
                 str(node),
             )
@@ -556,7 +558,8 @@ class BridgeTests(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["status"], "planned")
             self.assertIn('model_provider = "openai"', payload["diff"])
-            self.assertIn('openai_base_url = "http://127.0.0.1:8318/v1"', payload["diff"])
+            self.assertIn('openai_base_url = "http://127.0.0.1:1/v1"', payload["diff"])
+            self.assertEqual(payload["service_action"], "start")
             self.assertFalse(runtime.exists())
             self.assertFalse(launch_agent.exists())
             with sqlite3.connect(state_db) as connection:

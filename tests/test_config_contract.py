@@ -28,7 +28,7 @@ class ConfigContractTests(unittest.TestCase):
 
     def invoke(self, command, expected=0):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with contextlib.redirect_stdout(out), patch.object(bridge, "wait_for_transparent_proxy", return_value=True):
             args = bridge.parser().parse_args(command)
             with self.assertRaises(SystemExit) as caught:
                 args.func(args)

@@ -856,17 +856,16 @@ def start_transparent_proxy(
     launch_agent_path: Path,
 ) -> str | None:
     if platform.system() == "Darwin":
-        launch_agent_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        atomic_write(
-            launch_agent_path,
-            launch_agent_source(node, runtime, helper, transparent_url, upstream_url),
-            0o600,
-        )
-        return start_launch_agent(launch_agent_path)
+        desired = launch_agent_source(node, runtime, helper, transparent_url, upstream_url)
+        current = launch_agent_path.read_text(encoding="utf-8") if launch_agent_path.exists() else None
+        changed = current != desired
+        if changed:
+            atomic_write(launch_agent_path, desired, 0o600)
+        return start_launch_agent(launch_agent_path, reload=changed)
     return start_detached_proxy(node, runtime, helper, transparent_url, upstream_url)
 
 
-def start_launch_agent(path: Path) -> str | None:
+def start_launch_agent(path: Path, reload: bool = False) -> str | None:
     domain = f"gui/{os.getuid()}"
     target = f"{domain}/{TRANSPARENT_LAUNCH_LABEL}"
     loaded = subprocess.run(
@@ -875,6 +874,14 @@ def start_launch_agent(path: Path) -> str | None:
         stderr=subprocess.DEVNULL,
         check=False,
     ).returncode == 0
+    if loaded and reload:
+        stopped = subprocess.run(
+            ["/bin/launchctl", "bootout", target], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, check=False,
+        )
+        if stopped.returncode != 0:
+            return "launchctl failed to unload the existing transparent proxy"
+        loaded = False
     command = ["/bin/launchctl", "kickstart", "-k", target] if loaded else [
         "/bin/launchctl",
         "bootstrap",
@@ -1066,7 +1073,12 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
     runtime_source = (SKILL_DIR / "scripts" / "transparent_proxy.mjs").read_text(encoding="utf-8")
     runtime_before = runtime_path.read_text(encoding="utf-8") if runtime_path.exists() else None
     runtime_changed = runtime_before != runtime_source
-    require_apply_sha(args, current_sha, config_changed or runtime_changed)
+    plist_source = launch_agent_source(node_path, runtime_path, helper_path, args.transparent_url, args.proxy_url) if platform.system() == "Darwin" else None
+    plist_before = launch_agent_path.read_text(encoding="utf-8") if plist_source is not None and launch_agent_path.exists() else None
+    plist_changed = plist_source is not None and plist_before != plist_source
+    healthy = wait_for_transparent_proxy(args.transparent_url, attempts=1)
+    service_action = ("restart" if healthy else "start") if runtime_changed or plist_changed or not healthy else "none"
+    require_apply_sha(args, current_sha, config_changed or service_action != "none")
     diff = root_config_diff(config_path, current, updated)
     result = {
         "status": "planned" if not args.apply else "unchanged",
@@ -1089,6 +1101,13 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
             "after_sha256": hashlib.sha256(runtime_source.encode()).hexdigest(),
         },
         "service_started": False,
+        "service_action": service_action,
+        "launch_agent_changes": {
+            "applicable": plist_source is not None,
+            "changed": plist_changed,
+            "before_sha256": hashlib.sha256(plist_before.encode()).hexdigest() if plist_before is not None else None,
+            "after_sha256": hashlib.sha256(plist_source.encode()).hexdigest() if plist_source is not None else None,
+        },
         "launch_agent": str(launch_agent_path),
         "backup": None,
         "secrets_redacted": True,
@@ -1096,11 +1115,10 @@ def cmd_configure_desktop(args: argparse.Namespace) -> None:
     if not args.apply:
         emit(result)
 
-    healthy = wait_for_transparent_proxy(args.transparent_url)
     if runtime_changed:
         atomic_write(runtime_path, runtime_source, 0o700)
         result["status"] = "applied"
-    if runtime_changed or not healthy:
+    if service_action != "none":
         launch_error = start_transparent_proxy(
             node_path, runtime_path, helper_path, args.transparent_url, args.proxy_url, launch_agent_path,
         )

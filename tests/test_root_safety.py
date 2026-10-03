@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -37,6 +38,12 @@ class RootSafetyTests(unittest.TestCase):
             {"mode": "chatgpt", "chatgpt_tokens_present": True}, None))
         self.auth_patch.start()
         self.addCleanup(self.auth_patch.stop)
+        platform_patch = patch.object(bridge.platform, "system", return_value="Darwin")
+        platform_patch.start()
+        self.addCleanup(platform_patch.stop)
+        health_patch = patch.object(bridge, "wait_for_transparent_proxy", return_value=True)
+        health_patch.start()
+        self.addCleanup(health_patch.stop)
 
     def base(self, command):
         result = [command, "--config", str(self.config), "--state-db", str(self.state)]
@@ -113,6 +120,9 @@ class RootSafetyTests(unittest.TestCase):
                                'openai_base_url = "http://127.0.0.1:8318/v1"\n'
                                'model_catalog_json = ' + json.dumps(str(self.catalog)) + '\n')
         self.runtime.write_text((SCRIPT.parent / "transparent_proxy.mjs").read_text())
+        (self.root / "fixture.plist").write_text(bridge.launch_agent_source(
+            self.config, self.runtime, self.config,
+            "http://127.0.0.1:8318/v1", "http://127.0.0.1:8317/v1"))
 
     def test_restore_selects_native_priority_without_changing_valid_selection(self):
         entries = [{**native_template(), "priority": 50},
@@ -140,6 +150,8 @@ class RootSafetyTests(unittest.TestCase):
             self.assertEqual(result["status"], "unchanged")
             self.assertFalse(result["runtime_changes"]["changed"])
             self.assertFalse(result["service_started"])
+            self.assertEqual(result["service_action"], "none")
+            self.assertFalse(result["launch_agent_changes"]["changed"])
             writer.assert_not_called()
             backup.assert_not_called()
             launch.assert_not_called()
@@ -150,6 +162,7 @@ class RootSafetyTests(unittest.TestCase):
         before_config = self.config.read_bytes()
         preview, _ = self.invoke(self.base("configure-desktop"))
         self.assertTrue(preview["runtime_changes"]["changed"])
+        self.assertEqual(preview["service_action"], "restart")
         self.assertNotEqual(preview["runtime_changes"]["before_sha256"], preview["runtime_changes"]["after_sha256"])
         with patch.object(bridge, "start_transparent_proxy") as launch:
             self.invoke(self.base("configure-desktop") + ["--apply"], expected=2)
@@ -183,10 +196,104 @@ class RootSafetyTests(unittest.TestCase):
         self.configured_desktop()
         with patch.object(bridge, "wait_for_transparent_proxy", side_effect=[False, True]), patch.object(
             bridge, "atomic_write") as writer, patch.object(bridge, "start_transparent_proxy", return_value=None) as launch:
-            result, _ = self.invoke(self.base("configure-desktop") + ["--apply"])
+            result, _ = self.invoke(self.base("configure-desktop") + ["--apply", "--expected-sha256",
+                hashlib.sha256(self.config.read_bytes()).hexdigest()])
             self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["service_action"], "start")
             writer.assert_not_called()
             launch.assert_called_once()
+
+    def test_missing_runtime_is_reported_and_deployed_even_with_healthy_listener(self):
+        self.configured_desktop()
+        self.runtime.unlink()
+        preview, _ = self.invoke(self.base("configure-desktop"))
+        self.assertEqual(preview["status"], "planned")
+        self.assertTrue(preview["runtime_changes"]["changed"])
+        self.assertIsNone(preview["runtime_changes"]["before_sha256"])
+        self.assertEqual(preview["service_action"], "restart")
+        self.assertFalse(self.runtime.exists())
+        with patch.object(bridge, "start_transparent_proxy", return_value=None) as launch:
+            result, _ = self.invoke(self.base("configure-desktop") + ["--apply", "--expected-sha256",
+                preview["config_sha256"]])
+            launch.assert_called_once()
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(self.runtime.read_bytes(), (SCRIPT.parent / "transparent_proxy.mjs").read_bytes())
+
+    def test_plist_changes_reject_noop_and_are_rewritten_with_reloaded_service(self):
+        plist = self.root / "fixture.plist"
+        for scenario in ["missing", "content", "node", "helper", "interpreter"]:
+            with self.subTest(scenario=scenario), contextlib.ExitStack() as mocks:
+                self.configured_desktop()
+                command = self.base("configure-desktop")
+                if scenario == "missing":
+                    plist.unlink()
+                elif scenario == "content":
+                    plist.write_text("<!-- different fixture plist -->\n")
+                elif scenario in {"node", "helper"}:
+                    replacement = self.root / (scenario + "-changed")
+                    replacement.touch()
+                    command += ["--" + scenario, str(replacement)]
+                else:
+                    mocks.enter_context(patch.object(bridge, "python_executable", return_value="/fixture/host/python3"))
+                before = plist.read_bytes() if plist.exists() else None
+                preview, _ = self.invoke(command)
+                self.assertFalse(preview["runtime_changes"]["changed"])
+                self.assertTrue(preview["launch_agent_changes"]["changed"])
+                self.assertEqual(preview["service_action"], "restart")
+                self.assertEqual(preview["status"], "planned")
+                self.assertEqual(plist.read_bytes() if plist.exists() else None, before)
+                with patch.object(bridge, "start_launch_agent", return_value=None) as manager:
+                    applied, _ = self.invoke(command + ["--apply", "--expected-sha256", preview["config_sha256"]])
+                    manager.assert_called_once_with(plist, reload=True)
+                self.assertEqual(applied["status"], "applied")
+                self.assertTrue(applied["service_started"])
+                self.assertNotEqual(plist.read_bytes(), before)
+                repeated, _ = self.invoke(command)
+                self.assertFalse(repeated["launch_agent_changes"]["changed"])
+                self.assertEqual(repeated["service_action"], "none")
+                with patch.object(bridge, "atomic_write") as writer, patch.object(
+                    bridge, "start_transparent_proxy") as launch:
+                    result, _ = self.invoke(command + ["--apply"])
+                    self.assertEqual(result["status"], "unchanged")
+                    writer.assert_not_called()
+                    launch.assert_not_called()
+
+    def test_preview_service_actions_are_visible_and_no_start_occurs(self):
+        self.configured_desktop()
+        with patch.object(bridge, "start_transparent_proxy") as launch, patch.object(bridge, "atomic_write") as writer:
+            same, _ = self.invoke(self.base("configure-desktop"))
+            self.assertEqual(same["service_action"], "none")
+            with patch.object(bridge, "wait_for_transparent_proxy", return_value=False):
+                down, _ = self.invoke(self.base("configure-desktop"))
+            self.assertEqual(down["service_action"], "start")
+            (self.root / "fixture.plist").unlink()
+            update, _ = self.invoke(self.base("configure-desktop"))
+            self.assertEqual(update["service_action"], "restart")
+            writer.assert_not_called()
+            launch.assert_not_called()
+
+    def test_missing_plist_cannot_return_unchanged_for_healthy_runtime(self):
+        self.configured_desktop()
+        plist = self.root / "fixture.plist"
+        plist.unlink()
+        with patch.object(bridge, "start_launch_agent", return_value=None) as manager:
+            result, _ = self.invoke(self.base("configure-desktop") + ["--apply", "--expected-sha256",
+                hashlib.sha256(self.config.read_bytes()).hexdigest()])
+        self.assertEqual(result["status"], "applied")
+        self.assertTrue(plist.exists())
+        manager.assert_called_once_with(plist, reload=True)
+
+    def test_changed_loaded_launch_agent_is_unloaded_then_bootstrapped_from_new_plist(self):
+        plist = self.root / "fixture.plist"
+        commands = []
+        def fake(command, **kwargs):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        with patch.object(bridge.subprocess, "run", side_effect=fake):
+            self.assertIsNone(bridge.start_launch_agent(plist, reload=True))
+        self.assertEqual([command[1] for command in commands], ["print", "bootout", "bootstrap"])
+        self.assertEqual(commands[-1][-1], str(plist))
+        self.assertNotIn("kickstart", [command[1] for command in commands])
 
 
 if __name__ == "__main__":
