@@ -6,6 +6,16 @@
 
 本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
 
+**前提：本机需要运行 CPA。** 连接 Coding Plan／订阅账号、转发请求的是 CPA，本工具负责把 Codex 接到 CPA 上，不能替代它。还没有 CPA 的，按下文 [首次安装 CPA](#首次安装-cpa) 安装。
+
+## 特点
+
+- **新模型自动出现。** 模型目录按 CPA 的实时列表生成，仓库不写死任何模型 ID。CPA 列表里出现新模型，下一次 `sync` 就进入 Codex 选择器；配合[每日自动同步](#自动同步)，不需要改代码、写清单或等新版本。
+- **ChatGPT 登录和历史任务保持不变。** macOS 默认的桌面透明代理模式不切换 Provider，ChatGPT 账号功能和既有任务都还在，CPA 提供的模型与原生 GPT 模型共用一个选择器。
+- **偏好只写差异。** 隐藏某个模型、改默认推理档位，在 `overrides.json` 里写一行，支持通配符；没写的字段始终跟随上游。
+- **写入有把关。** 新目录先交给本机 Codex 自己的解析器加载，读不了就不写；改根配置要先预览并带上预览摘要确认；只同步本工具自己的路由，不覆盖 Router 等其他网关。CPA 客户端密钥不写进 Codex 配置，输出中的地址和错误信息会脱敏。
+- **用真实调用验收。** `probe` 让模型实际执行 shell 命令或按顺序完成两步工具调用；只在 `/v1/models` 里列出不算接入成功。
+
 ## 工作方式
 
 本工具只维护配置；运行时的请求转发由透明代理和 CPA 完成。默认链路：
