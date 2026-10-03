@@ -373,13 +373,28 @@ def codex_client_version(codex: str) -> str | None:
 
 def redact_url(url: str) -> str:
     """Drop userinfo, query and fragment before a URL enters a receipt."""
-    parts = urllib.parse.urlsplit(url)
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return "<invalid URL>"
     host = parts.hostname or ""
     if ":" in host:
         host = f"[{host}]"
-    if parts.port:
-        host += f":{parts.port}"
+    if port:
+        host += f":{port}"
     return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
+def same_local_endpoint(left: str, right: str) -> bool:
+    """localhost, 127.0.0.1 and ::1 name the same proxy when port and path match."""
+    try:
+        a, b = urllib.parse.urlsplit(left), urllib.parse.urlsplit(right)
+        ports = (a.port, b.port)
+    except ValueError:
+        return False
+    return (is_loopback(left) and is_loopback(right) and a.scheme == b.scheme
+            and ports[0] == ports[1] and a.path.rstrip("/") == b.path.rstrip("/"))
 
 
 def configured_catalog_path(config_path: Path, value: object) -> Path | None:
@@ -401,7 +416,9 @@ def codex_rejects_catalog(codex: str, path: Path, slugs: list[str]) -> str | Non
         return f"codex debug models failed: {type(exc).__name__}"
     if proc.returncode != 0:
         lines = proc.stderr.strip().splitlines()
-        return (lines[-1] if lines else f"codex debug models exited {proc.returncode}")[:300]
+        # serde 会把出错的值放进双引号；只保留字段名（反引号）和位置。
+        message = re.sub(r'"(?:[^"\\]|\\.)*"', '"<value>"', lines[-1]) if lines else ""
+        return (message or f"codex debug models exited {proc.returncode}")[:300]
     try:
         loaded = [entry["slug"] for entry in json.loads(proc.stdout)["models"]]
     except (ValueError, KeyError, TypeError):
@@ -416,7 +433,7 @@ def sync_route(config: dict, transparent_url: str) -> tuple[str, str, str | None
     active = config.get("model_provider", "openai")
     root_base_url = config.get("openai_base_url")
     if active == "openai" and isinstance(root_base_url, str) and root_base_url:
-        if root_base_url.rstrip("/") != transparent_url.rstrip("/"):
+        if not same_local_endpoint(root_base_url, transparent_url):
             raise SyncBlocked({
                 "error": "openai_base_url is not this bridge's transparent proxy; another gateway owns this catalog "
                          "(pass --transparent-url if the proxy listens elsewhere)",
@@ -476,14 +493,16 @@ def load_overrides(path: Path) -> list[tuple[str, dict]]:
 
 def apply_overrides(entries: list[dict], overrides: list[tuple[str, dict]]) -> tuple[list[str], list[str]]:
     """Apply glob keys in file order, then an exact ID; return (unmatched keys, errors)."""
-    patterns = [(key, fields) for key, fields in overrides if any(char in key for char in "*?[")]
+    slugs = {entry["slug"] for entry in entries}
     exact = dict(overrides)
+    # 与真实 ID 完全相同的键只按精确 ID 处理，带方括号的 ID 不会再当通配符改到别的模型。
+    patterns = [(key, fields) for key, fields in overrides if key not in slugs and any(char in key for char in "*?[")]
     matched: set[str] = set()
     errors: list[str] = []
     for entry in entries:
         slug = entry["slug"]
         # 精确 ID 优先识别，带方括号的真实 ID 也不会被当成通配符。
-        rules = [(key, fields) for key, fields in patterns if key != slug and fnmatch.fnmatchcase(slug, key)]
+        rules = [(key, fields) for key, fields in patterns if fnmatch.fnmatchcase(slug, key)]
         if slug in exact:
             rules.append((slug, exact[slug]))
         touched_reasoning = False
@@ -498,7 +517,8 @@ def apply_overrides(entries: list[dict], overrides: list[tuple[str, dict]]) -> t
         if touched_reasoning:
             levels = entry.get("supported_reasoning_levels")
             efforts = [level.get("effort") for level in levels if isinstance(level, dict)] if isinstance(levels, list) else []
-            if entry.get("default_reasoning_level") not in efforts:
+            default = entry.get("default_reasoning_level")
+            if efforts and default is not None and default not in efforts:
                 errors.append(f"{slug}: default_reasoning_level is not one of {efforts}")
     return [key for key, _ in overrides if key not in matched], errors
 
@@ -1342,10 +1362,13 @@ def cmd_audit(args: argparse.Namespace) -> None:
             if not catalog_in_sync:
                 findings.append("model catalog differs from the live list; run sync")
         except SyncBlocked as blocked:
-            # Router 等其他网关拥有的目录不归本工具同步，不算问题。
+            catalog_sync_error = blocked.payload.get("error") or "sync is blocked"
+            # Router 等其他网关拥有的目录不归本工具同步，只说明原因，不算问题。
             if not blocked.payload.get("route_owned_elsewhere"):
-                catalog_sync_error = blocked.payload.get("error") or "sync is blocked"
                 findings.append("model catalog cannot be regenerated from the live list")
+        except Exception as exc:
+            catalog_sync_error = f"unexpected {type(exc).__name__}"
+            findings.append("model catalog cannot be regenerated from the live list")
     codex_version = None
     try:
         codex_version = subprocess.run(
@@ -1534,12 +1557,12 @@ LEGACY_STATE_FILES = {
 def configured_models(config: dict, config_path: Path) -> tuple[list[str], list[str]]:
     """Return (required, protected). Required models must be in the catalog; protected ones are never removed."""
     agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
-    required = {config.get("model"), config.get("review_model"), agents.get("default_subagent_model")}
-    protected: set[object] = set()
+    required = [config.get("model"), config.get("review_model"), agents.get("default_subagent_model")]
+    protected: list[object] = []
     profiles = config.get("profiles") if isinstance(config.get("profiles"), dict) else {}
     for profile in profiles.values():
         if isinstance(profile, dict):
-            protected.add(profile.get("model"))
+            protected.append(profile.get("model"))
     for name, role in agents.items():
         if not isinstance(role, dict) or not isinstance(role.get("config_file"), str) or not role["config_file"].strip():
             continue
@@ -1547,9 +1570,12 @@ def configured_models(config: dict, config_path: Path) -> tuple[list[str], list[
         role_config, error = load_config(role_path)
         if error:
             raise SyncBlocked({"error": f"agent role {name!r} config_file is unreadable: {error}"})
-        protected.add(role_config.get("model"))
-    keep = lambda names: sorted(name for name in names if isinstance(name, str) and name)
-    return keep(required), keep(protected - required)
+        protected.append(role_config.get("model"))
+    invalid = [name for name in required + protected if name is not None and not isinstance(name, str)]
+    if invalid:
+        raise SyncBlocked({"error": "a configured model name is not a string"})
+    names = lambda values: {name for name in values if isinstance(name, str) and name}
+    return sorted(names(required)), sorted(names(protected) - names(required))
 
 
 def catalog_changes(current: list[dict], final: list[dict]) -> dict:
@@ -1628,10 +1654,17 @@ def plan_catalog(config: dict, config_path: Path, catalog_path: Path, state_dir:
         # 目录完全由本工具生成；损坏时直接重建，不让每日同步永久卡住。
         current, existing_error = [], f"{type(exc).__name__}: {exc}"
     final_ids = {entry["slug"] for entry in final}
-    current_ids = {entry["slug"] for entry in current}
+    baseline_ids = {entry["slug"] for entry in current}
+    if existing_error:
+        # 当前目录读不了时，以上一份备份判断哪些模型原本存在；连备份也没有就一律要求存在。
+        try:
+            baseline_ids = {entry["slug"] for entry in catalog_models(catalog_path.with_name(catalog_path.name + ".previous"))}
+        except (OSError, ValueError):
+            baseline_ids = None
     required, protected = configured_models(config, config_path)
     missing_required = [name for name in required if name not in final_ids]
-    removed_protected = [name for name in protected if name in current_ids and name not in final_ids]
+    removed_protected = [name for name in protected
+                         if name not in final_ids and (baseline_ids is None or name in baseline_ids)]
     if missing_required or removed_protected:
         raise SyncBlocked({
             "error": "the live list no longer has a model the config uses",
@@ -1707,8 +1740,14 @@ def cmd_sync(args: argparse.Namespace) -> None:
         )
         result = {"status": "planned" if not args.apply else "unchanged", **plan["receipt"], "backup": None}
         if args.apply and (plan["final"] != plan["current"] or not plan["current_valid"]):
-            # A corrupt current file is not worth keeping as the rollback copy.
-            result["backup"] = write_checked_catalog(target_path, plan["final"], args.codex, plan["current_valid"])
+            # 只有 Codex 能加载的旧目录才值得替换掉上一份回退副本。
+            keep_previous = plan["current_valid"] and target_path.exists()
+            if keep_previous:
+                rejected = codex_rejects_catalog(args.codex, target_path, [entry["slug"] for entry in plan["current"]])
+                if rejected:
+                    keep_previous = False
+                    result["existing_catalog_invalid"] = f"Codex cannot load it: {rejected}"
+            result["backup"] = write_checked_catalog(target_path, plan["final"], args.codex, keep_previous)
             result["status"] = "applied"
     except SyncBlocked as blocked:
         emit({**blocked.payload, "secrets_redacted": True}, 2)
