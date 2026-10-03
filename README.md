@@ -2,9 +2,9 @@
 
 中文 | [English](README.en.md)
 
-**在 Codex 中直接使用 Coding Plan 与订阅模型。** 本工具将 Codex 接入本机运行的 CLIProxyAPI（以下简称 CPA），使 Kimi、Gemini 等模型与 GPT 共用同一个模型选择器，且不影响 ChatGPT 登录、账号功能与历史任务。新模型自动同步，无需修改代码或等待新版本。
+**在 Codex 中直接使用 Coding Plan 与订阅模型。** 本工具将 Codex 接入本机运行的 CLIProxyAPI（以下简称 CPA），使 CPA 支持的模型共用 Codex 模型选择器，且不影响 ChatGPT 登录、账号功能与历史任务。新模型自动同步，无需修改代码或等待新版本。
 
-- **Coding Plan**：Kimi、智谱等厂商面向编程工具推出的订阅套餐。
+- **Coding Plan 与订阅**：厂商面向编程工具推出的套餐与模型订阅，国内外均支持，例如国内的 Kimi、智谱 GLM 套餐，海外的 ChatGPT、Gemini 订阅。
 - **CPA**：本机运行的开源代理服务，负责登录上述账号并转发请求。
 
 当前开发版本：V0.0.5（未发布） · [更新日志](changelogs/V0.0.5.md)；已发布版本：[V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4)。本项目基于 [Zhijian Skills 的 codex-cli-model-bridge](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge) 二次开发。
@@ -14,23 +14,26 @@
 ## ✨ 特点
 
 - 🔄 **新模型自动同步**：模型列表直接取自 CPA。配合每日定时同步，CPA 新增的模型次日即出现在 Codex 模型选择器中，无需修改代码、编写配置或等待新版本。
-- 🔐 **登录与历史任务完整保留**：常见接入方式需要把 Codex 的模型服务商切换为第三方，原有历史任务随之从列表中消失。本工具在 macOS 上保持服务商为 OpenAI，仅将请求地址指向本机代理，ChatGPT 登录、账号功能与历史任务均不受影响。
-- 🎛️ **差异化个人设置**：隐藏模型、调整默认推理强度等偏好只需在个人设置文件中写一行，支持 `gpt-image-*` 形式的通配符；未设置的参数沿用 CPA 提供的默认值。
-- 🛡️ **写入校验与备份回退**：新生成的模型目录须通过 Codex 自身的解析检查才会写入；Codex 主配置的修改先预览、经确认后写入；主配置与模型目录在改动前均自动备份，可随时恢复。CPA 密钥不写入 Codex 配置，也不出现在任何输出中。
-- ✅ **真实调用验收**：以模型实际执行命令作为接入成功的标准，仅出现在模型列表中不视为接入成功。
-- 🤖 **面向 Agent 的安装手册**：Claude Code、Codex、Gemini CLI 等 Agent 可按 [SETUP.md](SETUP.md) 完成安装、配置与验收，并在安装软件、修改配置、重启服务、消耗模型额度前征求确认。
+- 🔐 **登录与历史任务完整保留**：常见接入方式需要将 Codex 的模型服务商切换为第三方，原有历史任务随之从列表中消失。本工具在 macOS 上保持服务商为 OpenAI，仅将请求地址指向本机代理，ChatGPT 登录、账号功能与历史任务均不受影响。
+- 🎛️ **差异化个人设置**：只需在个人设置文件中填写与默认值不同的字段，一行即可隐藏模型或调整默认推理强度，支持 `gpt-image-*` 通配符；未设置的参数沿用 CPA 默认值。
+- 🤖 **第三方模型可作子代理**：Codex 原生子代理的任务可交由 Kimi、Gemini 等 CPA 模型执行。本工具提供 `configure-multi-agent`（预览并写入 CPA 的多代理兼容开关）与 `probe-multi-agent`（检查子任务消息能否送达），详见[子代理兼容性](references/spawn-compatibility.md)。
+- 🛡️ **写入校验与备份回退**：新模型目录须通过 Codex 自身解析检查才会写入；Codex 主配置改动先预览、经确认后写入；主配置改动前自动备份，模型目录保留上一版，均可随时恢复。CPA 密钥不写入 Codex 配置，也不出现在输出中。
 
 ## 🧩 支持的模型
 
-CPA 能够转发的模型均会进入 Codex 模型目录：原生 Codex 模型沿用官方参数，其他模型由 CPA 生成相应参数。下表为已实测的模型系列，示例截至 2026 年 10 月；实际可用的模型以 CPA 返回的列表为准。
+CPA 支持的模型均可接入，本工具不限定模型：原生 Codex 模型沿用官方参数，其他模型由 CPA 生成参数。下表仅为常见模型系列的示例；实际可用的模型以 CPA 返回的列表为准，CPA 支持的新模型会自动出现。
 
-| 模型系列 | 示例模型 | CPA 接入方式 | 实测记录 |
-| --- | --- | --- | --- |
-| GPT（OpenAI） | `gpt-6-astra`、`gpt-6.1-sol`、`gpt-6-luna` | ChatGPT／Codex 账号 | ✅ 当前版本，工具调用通过 |
-| Gemini | `gemini-3.8-flash` | Antigravity；CPA 另支持 Gemini CLI、AI Studio、Vertex AI | ✅ 早期版本，子代理任务通过 |
-| Kimi | `kimi-k3`、`kimi-k2.8` | Kimi Code 套餐 | ✅ 早期版本，工具调用通过 |
+| 模型系列 | 示例模型 | CPA 接入方式 |
+| --- | --- | --- |
+| GPT（OpenAI） | GPT-6 Astra、GPT-6.1 Sol、GPT-6 Luna | ChatGPT／Codex 账号 |
+| Gemini | Gemini 3.8 Flash、Gemini 3.1 Pro Preview | Gemini CLI、AI Studio、Vertex AI、Antigravity、Gemini API Key |
+| Kimi | Kimi K3、Kimi K2.8 Preview | Kimi Code 套餐或 API Key |
+| Grok（xAI） | Grok 4.7 | xAI |
+| DeepSeek | DeepSeek V4.1 Flash | OpenAI 兼容接口 |
+| 智谱 GLM | GLM-5.3 | OpenAI 兼容接口 |
+| 其他 OpenAI 兼容服务 | 如 OpenRouter 提供的模型 | OpenAI 兼容接口 |
 
-早期版本指 V0.0.4 及以前：模型目录由手写清单生成，请求经过的透明代理与 CPA 通路与当前版本相同。
+OpenAI 兼容接口在 CPA 配置的 `openai-compatibility` 中添加。
 
 ## ⚙️ 工作原理
 

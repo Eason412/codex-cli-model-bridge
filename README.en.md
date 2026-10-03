@@ -2,9 +2,9 @@
 
 [中文](README.md) | English
 
-**Coding Plan and subscription models, directly in Codex.** This tool connects Codex to CLIProxyAPI (CPA) running on your machine, so models such as Kimi and Gemini share one model picker with GPT, without affecting your ChatGPT sign-in, account features or task history. New models sync automatically, with no code changes and no waiting for a new release.
+**Coding Plan and subscription models, directly in Codex.** This tool connects Codex to CLIProxyAPI (CPA) running on your machine, so all models supported by CPA share the Codex model picker, without affecting your ChatGPT sign-in, account features or task history. New models sync automatically, with no code changes and no waiting for a new release.
 
-- **Coding Plan**: a subscription that vendors such as Moonshot (Kimi) and Zhipu offer for coding tools.
+- **Coding Plans and subscriptions**: plans and model subscriptions that vendors offer for coding tools, supported both in China and abroad, for example Kimi and Zhipu GLM plans in China and ChatGPT and Gemini subscriptions elsewhere.
 - **CPA**: an open-source proxy that runs locally, signs in to those accounts and forwards requests to them.
 
 Current development version: V0.0.5 (unreleased) · [Changelog](changelogs/V0.0.5.md) (Chinese); latest release: [V0.0.4](https://github.com/Eason412/codex-cli-model-bridge/releases/tag/V0.0.4). Derived from [codex-cli-model-bridge in Zhijian Skills](https://github.com/zjp1997720/zhijian-skills/tree/main/skills/codex-cli-model-bridge).
@@ -13,24 +13,27 @@ Current development version: V0.0.5 (unreleased) · [Changelog](changelogs/V0.0.
 
 ## ✨ Features
 
-- 🔄 **Automatic model sync**: the model list comes straight from CPA. With a daily scheduled sync, a model added to CPA appears in the Codex model picker the next day, with no code to change, no config to write and no release to wait for.
-- 🔐 **Sign-in and task history preserved**: typical setups switch Codex to a third-party model provider, which removes earlier tasks from the task list. On macOS this tool keeps the provider as OpenAI and only points the request URL at a local proxy, leaving your ChatGPT sign-in, account features and task history untouched.
-- 🎛️ **Minimal personal settings**: hiding a model or changing its default reasoning effort takes one line in a personal settings file, with wildcards such as `gpt-image-*`. Anything not set keeps the defaults CPA provides.
-- 🛡️ **Checked writes with rollback**: a new model catalog is written only after it passes Codex's own parser; changes to the main Codex config are previewed and written only after confirmation; both the main config and the catalog are backed up before every change and can be restored at any time. The CPA key never enters Codex config or any output.
-- ✅ **Acceptance by real calls**: a model counts as connected only after it actually runs a command, not merely by appearing in the model list.
-- 🤖 **Setup manual for agents**: Claude Code, Codex, Gemini CLI and other agents can follow [SETUP.md](SETUP.md) to install, configure and verify everything, asking for confirmation before installing software, changing configuration, restarting services or spending model quota.
+- 🔄 **Automatic model sync**: the model list comes directly from CPA. With a daily scheduled sync, models added to CPA appear in the Codex model picker the next day, without code changes, configuration changes or a new release.
+- 🔐 **Sign-in and task history preserved**: typical setups switch Codex to a third-party model provider, which removes existing tasks from the task list. On macOS, this tool keeps the provider as OpenAI and points only the request URL at a local proxy, preserving ChatGPT sign-in, account features and task history.
+- 🎛️ **Minimal personal settings**: specify only fields that differ from the defaults in your personal settings file; one line can hide a model or adjust its default reasoning effort, with wildcard support such as `gpt-image-*`. Unspecified parameters retain CPA defaults.
+- 🤖 **Third-party models as subagents**: Codex native subagent tasks can run on CPA models such as Kimi and Gemini. `configure-multi-agent` previews and writes CPA's multi-agent compatibility flag, and `probe-multi-agent` checks that subagent task messages are delivered; see [Subagent compatibility](references/spawn-compatibility.md).
+- 🛡️ **Checked writes with rollback**: a new model catalog is written only after it passes Codex's own parser; changes to the main Codex config are previewed and written after confirmation; the main config is backed up before each change and the catalog keeps its previous version, so both can be restored at any time. The CPA key is never written to Codex config or included in output.
 
 ## 🧩 Supported models
 
-Every model CPA can forward enters the Codex model catalog: native Codex models keep their official parameters, and CPA generates parameters for the others. The table lists the model families tested so far, with examples as of October 2026; the models actually available are whatever CPA returns.
+All models supported by CPA can be connected; this tool does not restrict model choice. Native Codex models retain their official parameters, while CPA generates parameters for other models. The table contains only examples of common model families; the available models are determined by the list CPA returns, and newly supported models appear automatically.
 
-| Model family | Example models | Connected in CPA via | Test record |
-| --- | --- | --- | --- |
-| GPT (OpenAI) | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | ChatGPT / Codex account | ✅ Current version, tool calls pass |
-| Gemini | `gemini-3.8-flash` | Antigravity; CPA also supports Gemini CLI, AI Studio and Vertex AI | ✅ Earlier versions, subagent task passes |
-| Kimi | `kimi-k3`, `kimi-k2.8` | Kimi Code plan | ✅ Earlier versions, tool calls pass |
+| Model family | Example models | Connected in CPA via |
+| --- | --- | --- |
+| GPT (OpenAI) | GPT-6 Astra, GPT-6.1 Sol, GPT-6 Luna | ChatGPT / Codex account |
+| Gemini | Gemini 3.8 Flash, Gemini 3.1 Pro Preview | Gemini CLI, AI Studio, Vertex AI, Antigravity, Gemini API Key |
+| Kimi | Kimi K3, Kimi K2.8 Preview | Kimi Code plan or API Key |
+| Grok (xAI) | Grok 4.7 | xAI |
+| DeepSeek | DeepSeek V4.1 Flash | OpenAI-compatible endpoint |
+| Zhipu GLM | GLM-5.3 | OpenAI-compatible endpoint |
+| Other OpenAI-compatible services | For example, models available through OpenRouter | OpenAI-compatible endpoint |
 
-Earlier versions means V0.0.4 and before: the model catalog came from hand-written manifests, while requests took the same transparent proxy and CPA route as now.
+Add OpenAI-compatible endpoints under `openai-compatibility` in the CPA configuration.
 
 ## ⚙️ How it works
 
